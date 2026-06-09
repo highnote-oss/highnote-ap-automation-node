@@ -19,6 +19,7 @@ import { registerAuthHook } from "./middleware/auth.js";
 import { authRoutes } from "./routes/auth.js";
 import { meRoute } from "./routes/me.js";
 import { fundingAccountRoutes } from "./routes/fundingAccounts.js";
+import { invoiceRoutes } from "./routes/invoices.js";
 import { environment } from "./services/highnote.js";
 
 // Detect a Highnote/GraphQL rate-limit error. The SDK surfaces these as a raw
@@ -242,8 +243,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Protected route modules
   await app.register(meRoute);
   await app.register(fundingAccountRoutes);
+  await app.register(invoiceRoutes);
 
-  // Additional route modules (invoices, webhooks, etc.) are registered here as
+  // Additional route modules (webhooks, etc.) are registered here as
   // subsequent tasks add them.
 
   // Serve frontend static files in production, or in dev once the SPA has been

@@ -273,12 +273,26 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(simulateRoutes);
 
   // Serve frontend static files in production, or in dev once the SPA has been
-  // built locally. The path `../web/dist` resolves relative to the compiled
-  // file location (`api/dist/app.js` → `api/dist/../web/dist`); in dev under
-  // tsx it resolves from `api/src/app.ts` → `api/src/../web/dist`. Both work
-  // when the SPA is built at the monorepo root's `web/dist`.
+  // built locally. Two layouts are supported and probed in order:
+  //
+  //   1. Container layout (`Dockerfile`): SPA copied to `/app/public`, api to
+  //      `/app/dist`. From `/app/dist/app.js`, `__dirname/../public` resolves
+  //      to `/app/public`.
+  //   2. Repo layout (local dev or `npm run build` at the root): SPA built at
+  //      `<repo>/web/dist`. From `api/src/app.ts` (tsx) or `api/dist/app.js`,
+  //      `__dirname/../../web/dist` resolves to the repo's `web/dist`.
+  //
+  // The first candidate whose `index.html` exists wins. In production we still
+  // register `fastifyStatic` against the first candidate even if the file is
+  // missing — that surfaces a clear error rather than silently 404-ing.
   const __dirname = dirname(fileURLToPath(import.meta.url));
-  const spaRoot = join(__dirname, "..", "..", "web", "dist");
+  const spaCandidates = [
+    join(__dirname, "..", "public"),
+    join(__dirname, "..", "..", "web", "dist"),
+  ];
+  const spaRoot =
+    spaCandidates.find((candidate) => existsSync(join(candidate, "index.html"))) ??
+    spaCandidates[0];
   const shouldServeSpa =
     process.env.NODE_ENV === "production" || existsSync(join(spaRoot, "index.html"));
 

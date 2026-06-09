@@ -96,6 +96,12 @@ The full set with comments lives in [`.env.template`](./.env.template).
 ```bash
 git clone <repo>
 cd highnote-ap-automation-node
+
+# Where you put .env depends on which entry point you use:
+#   • Local dev / `npm start`        → `api/.env`  (Node CWD is `api/`)
+#   • `docker compose up`            → root `.env` (compose mounts it as env_file)
+# The file format is identical; pick one or symlink the other.
+
 cp .env.template api/.env
 # Edit api/.env — fill in HIGHNOTE_API_KEY, HIGHNOTE_CARD_PRODUCT_ID,
 # HIGHNOTE_APPLICATION_ID.
@@ -112,6 +118,13 @@ Or run the production build single-process (Fastify serves the prebuilt SPA):
 
 ```bash
 npm run build && npm start
+```
+
+Or via Docker (mirrors the Render deployment):
+
+```bash
+cp .env.template .env   # root .env for docker-compose
+docker compose up --build
 ```
 
 ### End-to-end smoke test

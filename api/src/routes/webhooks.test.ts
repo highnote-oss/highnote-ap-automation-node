@@ -344,15 +344,22 @@ describe("POST /api/webhooks — invoice state transitions", () => {
     expect(row?.status).toBe("CLEARED" satisfies InvoiceStatus);
   });
 
-  it("persists the raw event to webhook_events BEFORE dispatching transitions", async () => {
-    seedInvoice();
+  it("persists the raw event to webhook_events AND writes the invoice status BEFORE cards.close fails", async () => {
+    const invoiceId = seedInvoice({
+      status: "AUTHORIZED" satisfies InvoiceStatus,
+      amountCents: 10_000,
+      currencyCode: "USD",
+    });
 
-    // Force cards.close to throw — dispatch must have already logged the event.
+    // Force cards.close to throw — dispatch must have already logged the event
+    // AND written the invoice row to its terminal status before the failure.
     cardsClose.mockRejectedValueOnce(new Error("upstream close failed"));
 
     const payload = buildEventPayload({
       cardId: "pc_test",
       eventName: NotificationEventName.CARD_PAYMENT_CLEARED_EVENT,
+      approvedValue: 10_000,
+      approvedCurrency: "USD",
     });
 
     const { statusCode } = await postSigned(app, payload);
@@ -364,5 +371,108 @@ describe("POST /api/webhooks — invoice state transitions", () => {
       NotificationEventName.CARD_PAYMENT_CLEARED_EVENT,
     );
     expect(eventRows[0].eventId).toBe(payload.id);
+
+    // Status write happens before the close attempt — so even though close
+    // throws, the invoice has already advanced to its terminal status.
+    const row = db.select().from(invoices).where(eq(invoices.id, invoiceId)).get();
+    expect(row?.status).toBe("RECONCILED" satisfies InvoiceStatus);
+  });
+
+  it("guards the CLEARED transition — duplicate-delivered cleared event does NOT re-fire cards.close", async () => {
+    // Invoice is already in a terminal cleared status. A second delivery of
+    // the cleared event must not call cards.close again.
+    seedInvoice({
+      status: "RECONCILED" satisfies InvoiceStatus,
+      amountCents: 10_000,
+      currencyCode: "USD",
+    });
+
+    const { statusCode } = await postSigned(
+      app,
+      buildEventPayload({
+        cardId: "pc_test",
+        eventName: NotificationEventName.CARD_PAYMENT_CLEARED_EVENT,
+        approvedValue: 10_000,
+        approvedCurrency: "USD",
+      }),
+    );
+    expect(statusCode).toBe(200);
+
+    expect(cardsClose).not.toHaveBeenCalled();
+  });
+
+  it("returns 200 with the event persisted but no DB invoice update when event has no cardId", async () => {
+    const invoiceId = seedInvoice();
+
+    const payload = {
+      id: "evt_" + randomUUID(),
+      name: NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT,
+      data: {
+        __typename: "PaymentCardAuthorizationApprovedEvent",
+        // cardId intentionally omitted.
+        approvedAmount: { value: 5_000, currencyCode: "USD" },
+      },
+      // The SDK signature verifier requires a recent signatureTimestamp; it
+      // is unrelated to the cardId branch we're exercising here.
+      extensions: { signatureTimestamp: Date.now() },
+    };
+
+    const { statusCode } = await postSigned(app, payload);
+    expect(statusCode).toBe(200);
+
+    const eventRows = db.select().from(webhookEvents).all();
+    expect(eventRows).toHaveLength(1);
+
+    const row = db.select().from(invoices).where(eq(invoices.id, invoiceId)).get();
+    expect(row?.status).toBe("CARD_ISSUED" satisfies InvoiceStatus);
+    expect(cardsClose).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates by eventId — a duplicate delivery of the same event leaves only one webhook_events row", async () => {
+    seedInvoice();
+
+    const eventId = "evt_dup_" + randomUUID();
+    const payload = buildEventPayload({
+      cardId: "pc_test",
+      eventName: NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT,
+      eventId,
+    });
+
+    const first = await postSigned(app, payload);
+    expect(first.statusCode).toBe(200);
+
+    const second = await postSigned(app, payload);
+    expect(second.statusCode).toBe(200);
+
+    const eventRows = db.select().from(webhookEvents).all();
+    expect(eventRows).toHaveLength(1);
+    expect(eventRows[0].eventId).toBe(eventId);
+  });
+
+  // Notable: malformed JSON is rejected by Fastify's built-in JSON body
+  // parser BEFORE the route handler runs, so signature verification and
+  // the route's own JSON.parse catch are both bypassed. The observable
+  // result is 400 with no webhook_events row written. We pin this so a
+  // future signature-handling refactor can't accidentally let a malformed
+  // payload through to dispatch.
+  it("rejects with 400 a body with a valid HMAC but malformed JSON, and writes no webhook_events row", async () => {
+    seedInvoice();
+
+    const raw = "{not valid json";
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/webhooks",
+      headers: {
+        "highnote-signature": sign(raw),
+        "content-type": "application/json",
+      },
+      payload: raw,
+    });
+
+    expect(res.statusCode).toBe(400);
+
+    const eventRows = db.select().from(webhookEvents).all();
+    expect(eventRows).toHaveLength(0);
+    expect(cardsClose).not.toHaveBeenCalled();
   });
 });

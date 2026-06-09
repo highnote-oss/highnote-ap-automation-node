@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -33,6 +33,16 @@ interface CardPaymentEventData {
 }
 
 /**
+ * Terminal statuses for the clearing side of the flow. If an invoice has
+ * already reached one of these, a re-delivered CLEARED event is a no-op so
+ * we don't double-fire `cards.close()` on a concurrent delivery.
+ */
+const TERMINAL_CLEARED_STATUSES = [
+  "CLEARED",
+  "RECONCILED",
+] satisfies InvoiceStatus[];
+
+/**
  * Advance the invoice state machine in response to a card-payment event.
  *
  * Called AFTER the raw event has been persisted to `webhook_events`, so a
@@ -42,7 +52,9 @@ interface CardPaymentEventData {
  *   - AUTHORIZED transition only fires when the current status is exactly
  *     CARD_ISSUED, so a duplicate-delivered auth event after clearing does
  *     not regress the row.
- *   - CLEARED can land on top of AUTHORIZED or (rarely) CARD_ISSUED.
+ *   - CLEARED is skipped entirely when the invoice is already in a terminal
+ *     cleared status (CLEARED or RECONCILED), so concurrent deliveries do
+ *     not double-fire `cards.close()` on the upstream API.
  *   - If the cleared `approvedAmount` exactly matches the invoice's
  *     `amountCents` + `currencyCode`, we jump straight to RECONCILED (the
  *     terminal happy-path state) rather than writing an intermediate CLEARED
@@ -50,68 +62,97 @@ interface CardPaymentEventData {
  *   - After CLEARED/RECONCILED we fire `cards.close()` on the single-use
  *     card. Failures are logged but never block the response — the close
  *     is best-effort revocation, the network already cleared the funds.
+ *
+ * Errors raised by the DB or upstream calls are caught and logged, never
+ * thrown. The raw event row in `webhook_events` is the source of truth for
+ * replay, so swallowing a dispatch error here is preferable to returning 500
+ * and triggering Highnote-side retries.
  */
 async function dispatchInvoiceTransition(
-  app: FastifyInstance,
+  log: FastifyBaseLogger,
   eventType: string,
   eventData: CardPaymentEventData,
 ): Promise<void> {
-  const cardId = eventData.cardId;
-  if (!cardId) return;
+  try {
+    const cardId = eventData.cardId;
+    if (!cardId) return;
 
-  const isAuthorized = eventType === NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT;
-  const isCleared = eventType === NotificationEventName.CARD_PAYMENT_CLEARED_EVENT;
-  if (!isAuthorized && !isCleared) return;
+    const isAuthorized = eventType === NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT;
+    const isCleared = eventType === NotificationEventName.CARD_PAYMENT_CLEARED_EVENT;
+    if (!isAuthorized && !isCleared) return;
 
-  const invoice = db
-    .select()
-    .from(invoices)
-    .where(eq(invoices.cardId, cardId))
-    .get();
-  if (!invoice) {
-    app.log.info(
-      { eventType, cardId },
-      "Card-payment event delivered for unknown card; nothing to transition",
-    );
-    return;
-  }
-
-  const now = new Date().toISOString();
-
-  if (isAuthorized) {
-    if (invoice.status !== ("CARD_ISSUED" satisfies InvoiceStatus)) {
-      app.log.info(
-        { invoiceId: invoice.id, status: invoice.status },
-        "Auth event ignored — invoice not in CARD_ISSUED",
+    const invoice = db
+      .select()
+      .from(invoices)
+      .where(eq(invoices.cardId, cardId))
+      .get();
+    if (!invoice) {
+      log.info(
+        { eventType, cardId },
+        "Card-payment event delivered for unknown card; nothing to transition",
       );
       return;
     }
+
+    const now = new Date().toISOString();
+
+    if (isAuthorized) {
+      if (invoice.status !== ("CARD_ISSUED" satisfies InvoiceStatus)) {
+        log.info(
+          { invoiceId: invoice.id, status: invoice.status },
+          "Auth event ignored — invoice not in CARD_ISSUED",
+        );
+        return;
+      }
+      db.update(invoices)
+        .set({
+          status: "AUTHORIZED" satisfies InvoiceStatus,
+          updatedAt: now,
+        })
+        .where(eq(invoices.id, invoice.id))
+        .run();
+      return;
+    }
+
+    // isCleared
+    if (
+      (TERMINAL_CLEARED_STATUSES as readonly InvoiceStatus[]).includes(
+        invoice.status as InvoiceStatus,
+      )
+    ) {
+      log.info(
+        { invoiceId: invoice.id, status: invoice.status },
+        "Cleared event ignored — invoice already in terminal cleared status",
+      );
+      return;
+    }
+
+    // `approvedAmount` is the settled amount on a CLEARED event. We do NOT
+    // fall back to `requestedAmount` (the pre-auth ask) because a partial
+    // auth would silently look like an exact match. If `approvedAmount` is
+    // missing, `exactMatch` falls through to false and we conservatively
+    // land in CLEARED rather than RECONCILED.
+    const cleared = eventData.approvedAmount;
+    const exactMatch =
+      cleared?.value === invoice.amountCents &&
+      cleared?.currencyCode === invoice.currencyCode;
+    const newStatus: InvoiceStatus = exactMatch ? "RECONCILED" : "CLEARED";
+
     db.update(invoices)
-      .set({
-        status: "AUTHORIZED" satisfies InvoiceStatus,
-        updatedAt: now,
-      })
+      .set({ status: newStatus, updatedAt: now })
       .where(eq(invoices.id, invoice.id))
       .run();
-    return;
-  }
 
-  // isCleared
-  const cleared = eventData.approvedAmount ?? eventData.requestedAmount;
-  const exactMatch =
-    cleared?.value === invoice.amountCents &&
-    cleared?.currencyCode === invoice.currencyCode;
-  const newStatus: InvoiceStatus = exactMatch ? "RECONCILED" : "CLEARED";
-
-  db.update(invoices)
-    .set({ status: newStatus, updatedAt: now })
-    .where(eq(invoices.id, invoice.id))
-    .run();
-
-  try {
-    await highnote.cards.close({ paymentCardId: cardId });
+    try {
+      await highnote.cards.close({ paymentCardId: cardId });
+    } catch (err) {
+      log.error({ err, cardId }, "auto-close failed");
+    }
   } catch (err) {
-    app.log.error({ err, cardId }, "auto-close failed");
+    log.error(
+      { err, eventType },
+      "Invoice transition dispatch failed — event row is preserved for replay",
+    );
   }
 }
 
@@ -192,11 +233,11 @@ export async function webhookRoutes(app: FastifyInstance) {
 
       request.log.info({ eventType, eventId, isReplay }, "Webhook event received");
 
-      // Dispatch invoice state transitions. Errors are swallowed by the
-      // helper's own try/catch on the cards.close() call; any other throw
-      // would propagate to Fastify's error handler.
+      // Dispatch invoice state transitions. The helper catches and logs
+      // any thrown error so we always return 200 here — the raw event row
+      // above is the source of truth for replay.
       const eventData = (event.data ?? {}) as CardPaymentEventData;
-      await dispatchInvoiceTransition(app, eventType, eventData);
+      await dispatchInvoiceTransition(app.log, eventType, eventData);
 
       return reply.status(200).send({ received: true });
     },

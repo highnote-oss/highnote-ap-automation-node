@@ -157,12 +157,36 @@ export interface WebhookEvent {
 /**
  * Mirror of the funding accounts returned by `GET /api/funding-accounts`.
  * The Highnote SDK's `FinancialAccount` is large; we read only the fields the
- * picker needs, so the type stays narrow and the backend stays free to evolve.
+ * picker and admin page need, so the type stays narrow and the backend stays
+ * free to evolve.
+ *
+ * The backend returns the SDK's `AccountHolderFinancialAccountSummary`, which
+ * is the `FinancialAccountSummaryFragment` shape: `id`, `name`, `features[]`,
+ * `ledgers[]`. The summary does not include `accountStatus` directly, so the
+ * admin page derives a display status from the enabled features.
  */
+export interface FundingAccountLedger {
+  name?: string;
+  creditBalance?: { value?: number | string; currencyCode?: string } | null;
+  debitBalance?: { value?: number | string; currencyCode?: string } | null;
+}
+
+export interface FundingAccountFeature {
+  __typename?: string;
+  enabled?: boolean;
+}
+
 export interface FundingAccount {
   id: string;
   name?: string | null;
+  features?: FundingAccountFeature[] | null;
+  ledgers?: FundingAccountLedger[] | null;
   availableCash?: { value: number; currencyCode: string } | null;
+}
+
+export interface TopUpInput {
+  amountCents: number;
+  currencyCode: SupportedCurrencyCode;
 }
 
 export const api = {
@@ -215,5 +239,14 @@ export const api = {
       };
       return body.accounts;
     },
+    topup: (
+      id: string,
+      amountCents: number,
+      currencyCode: SupportedCurrencyCode = SupportedCurrency.USD
+    ): Promise<unknown> =>
+      request(`/admin/funding/${id}/topup`, {
+        method: "POST",
+        body: JSON.stringify({ amountCents, currencyCode }),
+      }),
   },
 };

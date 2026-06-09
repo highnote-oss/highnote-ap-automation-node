@@ -1,14 +1,39 @@
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
   serializerCompiler,
   validatorCompiler,
 } from "fastify-type-provider-zod";
 import jwt from "jsonwebtoken";
+import { eq } from "drizzle-orm";
+
+const { issueForApplicationWithOnDemandFunding } = vi.hoisted(() => ({
+  issueForApplicationWithOnDemandFunding: vi.fn(),
+}));
+
+vi.mock("@highnote-oss/nodejs-sdk", async () => {
+  const actual =
+    await vi.importActual<typeof import("@highnote-oss/nodejs-sdk")>(
+      "@highnote-oss/nodejs-sdk",
+    );
+  function MockHighnote() {
+    return {
+      cards: { issueForApplicationWithOnDemandFunding },
+    };
+  }
+  return {
+    ...actual,
+    Highnote: MockHighnote,
+  };
+});
+
 import { sqlite, db } from "../db/index.js";
 import { users, invoices } from "../db/schema.js";
 import { registerAuthHook, JWT_SECRET } from "../middleware/auth.js";
 import { invoiceRoutes } from "./invoices.js";
+import { applicationId } from "../services/highnote.js";
+import { HighnoteUserError } from "@highnote-oss/nodejs-sdk";
+import type { InvoiceStatus } from "../types.js";
 
 function buildTestApp(): FastifyInstance {
   const app = Fastify();
@@ -80,6 +105,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  issueForApplicationWithOnDemandFunding.mockReset();
   sqlite.exec("DELETE FROM invoices; DELETE FROM users;");
   const [a] = db
     .insert(users)
@@ -221,5 +247,172 @@ describe("POST /api/invoices/:id/cancel", () => {
     });
     expect(second.statusCode).toBe(400);
     expect(second.json().error).toMatch(/already CANCELLED/);
+  });
+});
+
+describe("POST /api/invoices/:id/approve", () => {
+  const sourceFundingAccountId = "fa_funding_src";
+
+  function paymentCardFixture(
+    overrides: Partial<{
+      id: string;
+      financialAccounts: Array<{ id: string; __typename: "FinancialAccount" }>;
+    }> = {},
+  ) {
+    return {
+      __typename: "PaymentCard" as const,
+      id: overrides.id ?? "pc_1",
+      bin: "411111",
+      last4: "1234",
+      network: "VISA",
+      status: "ACTIVE",
+      formFactor: "VIRTUAL",
+      expirationDate: "2028-12-31T00:00:00Z",
+      expirationMonth: "12",
+      expirationYear: "2028",
+      externalId: null,
+      financialAccounts: overrides.financialAccounts ?? [
+        { id: "fa_1", __typename: "FinancialAccount" as const },
+      ],
+    };
+  }
+
+  async function createDraftInvoice(): Promise<string> {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/invoices",
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: validBody,
+    });
+    return res.json().id;
+  }
+
+  it("transitions DRAFT to CARD_ISSUED and persists cardId + financialAccountId", async () => {
+    issueForApplicationWithOnDemandFunding.mockResolvedValueOnce(paymentCardFixture());
+    const id = await createDraftInvoice();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/invoices/${id}/approve`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { sourceFundingAccountId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      id,
+      status: "CARD_ISSUED" satisfies InvoiceStatus,
+      cardId: "pc_1",
+      cardFinancialAccountId: "fa_1",
+    });
+
+    const row = db.select().from(invoices).where(eq(invoices.id, id)).get();
+    expect(row?.status).toBe("CARD_ISSUED");
+    expect(row?.cardId).toBe("pc_1");
+    expect(row?.cardFinancialAccountId).toBe("fa_1");
+    expect(row?.sourceFundingAccountId).toBe(sourceFundingAccountId);
+  });
+
+  it("invokes the SDK with applicationId, sourceFinancialAccountId, and idempotencyKey === invoice.id", async () => {
+    issueForApplicationWithOnDemandFunding.mockResolvedValueOnce(paymentCardFixture());
+    const id = await createDraftInvoice();
+
+    await app.inject({
+      method: "POST",
+      url: `/api/invoices/${id}/approve`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { sourceFundingAccountId },
+    });
+
+    expect(issueForApplicationWithOnDemandFunding).toHaveBeenCalledTimes(1);
+    expect(issueForApplicationWithOnDemandFunding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        applicationId,
+        sourceFinancialAccountId: sourceFundingAccountId,
+        idempotencyKey: id,
+      }),
+    );
+  });
+
+  it("returns 400 when the invoice is not in DRAFT status", async () => {
+    const id = await createDraftInvoice();
+    db.update(invoices)
+      .set({ status: "CARD_ISSUED" satisfies InvoiceStatus })
+      .where(eq(invoices.id, id))
+      .run();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/invoices/${id}/approve`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { sourceFundingAccountId },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toMatch(/Cannot approve invoice in CARD_ISSUED/);
+    expect(issueForApplicationWithOnDemandFunding).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when another user attempts to approve the invoice", async () => {
+    const id = await createDraftInvoice();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/invoices/${id}/approve`,
+      headers: { authorization: `Bearer ${tokenB}` },
+      payload: { sourceFundingAccountId },
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(issueForApplicationWithOnDemandFunding).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 with fieldErrors when the SDK throws HighnoteUserError", async () => {
+    issueForApplicationWithOnDemandFunding.mockRejectedValueOnce(
+      new HighnoteUserError([
+        { code: "INVALID", description: "Funding account is closed" },
+      ]),
+    );
+    const id = await createDraftInvoice();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/invoices/${id}/approve`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { sourceFundingAccountId },
+    });
+
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error).toBe("Highnote validation error");
+    expect(body.fieldErrors).toEqual([
+      { code: "INVALID", description: "Funding account is closed" },
+    ]);
+
+    const row = db.select().from(invoices).where(eq(invoices.id, id)).get();
+    expect(row?.status).toBe("DRAFT");
+  });
+
+  it("returns 500 when the SDK returns a card with no financial accounts", async () => {
+    issueForApplicationWithOnDemandFunding.mockResolvedValueOnce(
+      paymentCardFixture({ financialAccounts: [] }),
+    );
+    const id = await createDraftInvoice();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/invoices/${id}/approve`,
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { sourceFundingAccountId },
+    });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({
+      error: "Card issued but no FA returned",
+      cardId: "pc_1",
+    });
+
+    const row = db.select().from(invoices).where(eq(invoices.id, id)).get();
+    expect(row?.status).toBe("DRAFT");
   });
 });

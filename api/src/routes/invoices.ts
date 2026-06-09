@@ -1,10 +1,19 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { randomUUID } from "node:crypto";
 import { eq, and, desc } from "drizzle-orm";
+import {
+  HighnoteUserError,
+  HighnoteAccessDeniedError,
+} from "@highnote-oss/nodejs-sdk";
 import { db } from "../db/index.js";
 import { invoices } from "../db/schema.js";
-import { CreateInvoiceBodySchema, IdParamsSchema } from "../types.js";
+import { highnote, applicationId } from "../services/highnote.js";
+import {
+  ApproveInvoiceBodySchema,
+  CreateInvoiceBodySchema,
+  IdParamsSchema,
+} from "../types.js";
 import type { InvoiceStatus } from "../types.js";
 
 export async function invoiceRoutes(app: FastifyInstance) {
@@ -93,4 +102,80 @@ export async function invoiceRoutes(app: FastifyInstance) {
       .run();
     return { id: row.id, status: "CANCELLED" satisfies InvoiceStatus };
   });
+
+  typedApp.post("/api/invoices/:id/approve", {
+    schema: {
+      tags: ["Invoices"],
+      description: "Approve a draft invoice and issue the single-use virtual card.",
+      params: IdParamsSchema,
+      body: ApproveInvoiceBodySchema,
+    },
+  }, async (request, reply) => {
+    const row = db
+      .select()
+      .from(invoices)
+      .where(and(eq(invoices.id, request.params.id), eq(invoices.userId, request.user.id)))
+      .get();
+    if (!row) return reply.status(404).send({ error: "Invoice not found" });
+    if (row.status !== ("DRAFT" satisfies InvoiceStatus)) {
+      return reply.status(400).send({ error: `Cannot approve invoice in ${row.status}` });
+    }
+
+    try {
+      const card = await highnote.cards.issueForApplicationWithOnDemandFunding({
+        applicationId,
+        sourceFinancialAccountId: request.body.sourceFundingAccountId,
+        options: {
+          activateOnCreate: true,
+          expirationDate: defaultExpirationDate(),
+        },
+        idempotencyKey: row.id,
+      });
+
+      const newFinancialAccountId = card.financialAccounts?.[0]?.id;
+      if (!newFinancialAccountId) {
+        return reply.status(500).send({
+          error: "Card issued but no FA returned",
+          cardId: card.id,
+        });
+      }
+
+      const now = new Date().toISOString();
+      db.update(invoices).set({
+        status: "CARD_ISSUED" satisfies InvoiceStatus,
+        sourceFundingAccountId: request.body.sourceFundingAccountId,
+        cardId: card.id,
+        cardFinancialAccountId: newFinancialAccountId,
+        updatedAt: now,
+      }).where(eq(invoices.id, row.id)).run();
+
+      return {
+        id: row.id,
+        status: "CARD_ISSUED" satisfies InvoiceStatus,
+        cardId: card.id,
+        cardFinancialAccountId: newFinancialAccountId,
+      };
+    } catch (err) {
+      return handleError(err, reply);
+    }
+  });
+}
+
+function defaultExpirationDate(): string {
+  // Default: ~2 years from now, end of month.
+  const d = new Date();
+  d.setFullYear(d.getFullYear() + 2);
+  d.setMonth(d.getMonth() + 1, 0);
+  d.setHours(23, 59, 59, 0);
+  return d.toISOString();
+}
+
+function handleError(err: unknown, reply: FastifyReply) {
+  if (err instanceof HighnoteUserError) {
+    return reply.status(400).send({ error: "Highnote validation error", fieldErrors: err.fieldErrors });
+  }
+  if (err instanceof HighnoteAccessDeniedError) {
+    return reply.status(403).send({ error: "Access denied", message: err.message });
+  }
+  throw err;
 }

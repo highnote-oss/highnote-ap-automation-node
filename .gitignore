@@ -10,9 +10,13 @@ build/
 .env.local
 .env.*.local
 
-# SQLite database
-api/data/*.db
-api/data/*.db-journal
+# SQLite database (development + runtime artifacts)
+api/data/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
 
 # Logs
 *.log

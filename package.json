@@ -1,0 +1,11 @@
+{
+  "name": "highnote-ap-automation-node",
+  "private": true,
+  "description": "Highnote AP invoice automation reference demo (Fastify + React + SQLite)",
+  "scripts": {
+    "build": "cd web && npm install && npm run build && cd ../api && npm install && npm run build",
+    "start": "cd api && node dist/index.js",
+    "dev:api": "cd api && npm run dev",
+    "dev:web": "cd web && npm run dev"
+  }
+}

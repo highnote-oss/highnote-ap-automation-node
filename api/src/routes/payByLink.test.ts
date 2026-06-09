@@ -217,6 +217,19 @@ describe("POST /api/invoices/:id/pay-link", () => {
 
     const row = db.select().from(invoices).where(eq(invoices.id, id)).get();
     expect(row?.payBySlug).toBe(secondSlug);
+
+    // Each POST must mint a fresh client token; guards against the SDK being
+    // short-circuited or memoized on the second call.
+    expect(createForPaymentCard).toHaveBeenCalledTimes(2);
+
+    // The previous slug must immediately stop resolving. Without this assertion,
+    // a refactor to one-to-many slug storage (or any bug leaving the old slug
+    // resolvable) would slip through.
+    const stale = await app.inject({
+      method: "GET",
+      url: `/api/pay/${firstSlug}`,
+    });
+    expect(stale.statusCode).toBe(404);
   });
 
   it("returns 400 with fieldErrors when the SDK throws HighnoteUserError", async () => {

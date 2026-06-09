@@ -1,15 +1,12 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { randomBytes } from "node:crypto";
 import { eq, and } from "drizzle-orm";
-import {
-  HighnoteUserError,
-  HighnoteAccessDeniedError,
-  PaymentCardClientTokenPermission,
-} from "@highnote-oss/nodejs-sdk";
+import { PaymentCardClientTokenPermission } from "@highnote-oss/nodejs-sdk";
 import { db } from "../db/index.js";
 import { invoices } from "../db/schema.js";
 import { highnote } from "../services/highnote.js";
+import { handleError } from "../lib/handleError.js";
 import {
   IdParamsSchema,
   SlugParamsSchema,
@@ -144,19 +141,4 @@ export async function payByLinkRoutes(app: FastifyInstance) {
       };
     },
   );
-}
-
-function handleError(err: unknown, reply: FastifyReply) {
-  if (err instanceof HighnoteUserError) {
-    return reply.status(400).send({
-      error: "Highnote validation error",
-      fieldErrors: err.fieldErrors,
-    });
-  }
-  if (err instanceof HighnoteAccessDeniedError) {
-    return reply
-      .status(403)
-      .send({ error: "Access denied", message: err.message });
-  }
-  throw err;
 }

@@ -1,14 +1,11 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { randomUUID } from "node:crypto";
 import { eq, and, desc } from "drizzle-orm";
-import {
-  HighnoteUserError,
-  HighnoteAccessDeniedError,
-} from "@highnote-oss/nodejs-sdk";
 import { db } from "../db/index.js";
 import { invoices } from "../db/schema.js";
 import { highnote, applicationId } from "../services/highnote.js";
+import { handleError } from "../lib/handleError.js";
 import {
   ApproveInvoiceBodySchema,
   CreateInvoiceBodySchema,
@@ -170,12 +167,3 @@ function defaultExpirationDate(): string {
   return d.toISOString();
 }
 
-function handleError(err: unknown, reply: FastifyReply) {
-  if (err instanceof HighnoteUserError) {
-    return reply.status(400).send({ error: "Highnote validation error", fieldErrors: err.fieldErrors });
-  }
-  if (err instanceof HighnoteAccessDeniedError) {
-    return reply.status(403).send({ error: "Access denied", message: err.message });
-  }
-  throw err;
-}

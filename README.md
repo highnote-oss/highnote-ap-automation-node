@@ -114,6 +114,22 @@ Or run the production build single-process (Fastify serves the prebuilt SPA):
 npm run build && npm start
 ```
 
+### End-to-end smoke test
+
+With the API running locally (`npm start` or `npm run dev:api` in another
+terminal) and a Highnote test environment configured, run:
+
+```bash
+npm run smoke
+```
+
+The script drives the full operator flow — signup, top-up, invoice creation,
+approval, pay-by-link, simulate-authorize, and CA + webhook assertions — and
+prints per-step pass/fail with elapsed timings. Override the target with
+`SMOKE_BASE_URL` (defaults to `http://localhost:3000`). The first run requires
+a funding account already registered on the Highnote dashboard for the
+configured card product.
+
 ### Docker (local)
 
 ```bash

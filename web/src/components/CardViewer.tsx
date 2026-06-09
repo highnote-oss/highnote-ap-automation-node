@@ -7,6 +7,14 @@ import { ErrorMessage } from "./ErrorMessage";
 interface CardViewerProps {
   invoiceId: string;
   paymentCardId: string;
+  /**
+   * Pre-fetched client token value. When supplied, the component skips the
+   * authed `api.invoices.cardViewerToken(invoiceId)` fetch and uses this
+   * value directly. The public pay-by-link page passes the token obtained
+   * via `GET /api/pay/:slug` — which has no JWT, so the authed fetch path
+   * would fail.
+   */
+  clientTokenValue?: string;
 }
 
 type ViewerStatus = "idle" | "loading" | "ready" | "error";
@@ -29,14 +37,24 @@ interface CardViewerError {
  * `value`. Cleanup runs the SDK's `unmount` on every unmount + on token
  * refresh so we never leave a stale iframe in the DOM.
  */
-export function CardViewer({ invoiceId, paymentCardId }: CardViewerProps) {
+export function CardViewer({
+  invoiceId,
+  paymentCardId,
+  clientTokenValue,
+}: CardViewerProps) {
   const tokenQuery = useQuery({
     queryKey: ["card-viewer-token", invoiceId],
     queryFn: () => api.invoices.cardViewerToken(invoiceId),
     // Don't auto-refresh; this token is single-use for the iframe.
     staleTime: Infinity,
     retry: false,
+    // Skip the authed fetch entirely when the caller supplied a token. The
+    // public pay-by-link page has no JWT, so triggering the authed query
+    // would surface a 401 to vendors.
+    enabled: clientTokenValue === undefined,
   });
+
+  const resolvedTokenValue = clientTokenValue ?? tokenQuery.data?.value;
 
   const [status, setStatus] = useState<ViewerStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -76,8 +94,8 @@ export function CardViewer({ invoiceId, paymentCardId }: CardViewerProps) {
   }, [paymentCardId]);
 
   useEffect(() => {
-    if (!tokenQuery.data) return;
-    void mount(tokenQuery.data.value);
+    if (!resolvedTokenValue) return;
+    void mount(resolvedTokenValue);
     return () => {
       toggleMaskRef.current = null;
       if (unmountRef.current) {
@@ -85,17 +103,20 @@ export function CardViewer({ invoiceId, paymentCardId }: CardViewerProps) {
         unmountRef.current = null;
       }
     };
-  }, [mount, tokenQuery.data]);
+  }, [mount, resolvedTokenValue]);
 
   function handleToggleMask() {
     toggleMaskRef.current?.();
     setMasked((prev) => !prev);
   }
 
-  if (tokenQuery.isPending) {
+  // Only surface the authed query's pending/error states when we actually
+  // depend on it. When the caller supplied a token, the query is disabled
+  // and `isPending` would otherwise stick true forever.
+  if (clientTokenValue === undefined && tokenQuery.isPending) {
     return <LoadingSpinner message="Loading card details..." />;
   }
-  if (tokenQuery.isError) {
+  if (clientTokenValue === undefined && tokenQuery.isError) {
     return (
       <ErrorMessage
         message={

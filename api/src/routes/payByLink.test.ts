@@ -287,12 +287,13 @@ describe("GET /api/pay/:slug (public)", () => {
     return { id, slug };
   }
 
-  it("returns vendor + amount + clientToken without requiring a JWT", async () => {
+  it("returns vendor + amount + clientToken + cardId without requiring a JWT", async () => {
     const { slug } = seedWithLink({
       vendorName: "Vendor Co",
       amountCents: 25_000,
       currencyCode: Iso4217Alpha3SupportedCurrency.USD,
       invoiceNumber: "INV-PAY-1",
+      cardId: "pc_vendor_facing",
     });
 
     const res = await app.inject({
@@ -308,17 +309,21 @@ describe("GET /api/pay/:slug (public)", () => {
       currencyCode: Iso4217Alpha3SupportedCurrency.USD,
       invoiceNumber: "INV-PAY-1",
       clientToken: "ct_persisted_value",
+      cardId: "pc_vendor_facing",
     });
   });
 
-  it("never exposes the cardId in the public payload", async () => {
-    const { slug } = seedWithLink({ cardId: "pc_secret_value" });
+  // The Highnote Card Viewer SDK's `renderFields` requires `paymentCardId`
+  // alongside the client token. We expose it deliberately: the client token
+  // already grants read access to this specific card, so the cardId without
+  // the matching token is useless. The slug remains the rotating secret.
+  it("exposes cardId alongside the client token for SDK consumption", async () => {
+    const { slug } = seedWithLink({ cardId: "pc_required_by_sdk" });
 
     const res = await app.inject({ method: "GET", url: `/api/pay/${slug}` });
 
-    const body = res.json();
-    expect(body).not.toHaveProperty("cardId");
-    expect(JSON.stringify(body)).not.toContain("pc_secret_value");
+    expect(res.statusCode).toBe(200);
+    expect(res.json().cardId).toBe("pc_required_by_sdk");
   });
 
   it("returns 404 for an unknown slug", async () => {

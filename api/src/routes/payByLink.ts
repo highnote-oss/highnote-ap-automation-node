@@ -95,8 +95,14 @@ export async function payByLinkRoutes(app: FastifyInstance) {
 
   // Public — vendor consumes via slug. Opts out of auth via `public: true`.
   // The slug itself is the rotating secret; the client token returned here is
-  // narrowly scoped to READ_RESTRICTED_DETAILS on the single-use card. We
-  // never expose the cardId in the public payload.
+  // narrowly scoped to READ_RESTRICTED_DETAILS on the single-use card.
+  //
+  // We do expose `cardId` because the Highnote Card Viewer SDK's `renderFields`
+  // requires `paymentCardId` alongside the client token. The card ID is not
+  // independently sensitive here: the client token already grants read access
+  // to this specific card's restricted details, and the slug rotates on every
+  // regeneration. The slug remains the single secret a vendor needs to keep
+  // private — the card ID without the matching token is useless.
   typedApp.get(
     "/api/pay/:slug",
     {
@@ -138,6 +144,7 @@ export async function payByLinkRoutes(app: FastifyInstance) {
         currencyCode: row.currencyCode,
         invoiceNumber: row.invoiceNumber,
         clientToken: row.payByClientToken,
+        cardId: row.cardId,
       };
     },
   );

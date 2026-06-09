@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { buildApp, ensureTables } from "./app.js";
 import * as collabAuthRegistration from "./services/collabAuthRegistration.js";
+import * as webhookRegistration from "./services/webhookRegistration.js";
 
 const port = parseInt(process.env.PORT ?? "3000", 10);
 
@@ -11,6 +12,7 @@ try {
   await app.listen({ port, host: "0.0.0.0" });
   app.log.info(`AP automation API running on http://localhost:${port}`);
   void collabAuthRegistration.init();
+  void webhookRegistration.init();
 } catch (err) {
   app.log.error(err);
   process.exit(1);

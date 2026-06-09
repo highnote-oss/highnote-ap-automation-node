@@ -49,3 +49,15 @@ export type InvoiceStatus =
   | "CLEARED"
   | "RECONCILED"
   | "CANCELLED";
+
+// --- Webhooks ---
+
+export const WebhookEventsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  offset: z.coerce.number().int().min(0).optional().default(0),
+});
+
+export const WebhookRegisterBodySchema = z.object({
+  name: z.string().min(1).max(255),
+  subscriptions: z.array(z.string().min(1)),
+});

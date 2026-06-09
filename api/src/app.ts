@@ -22,6 +22,7 @@ import { fundingAccountRoutes } from "./routes/fundingAccounts.js";
 import { invoiceRoutes } from "./routes/invoices.js";
 import { clientTokenRoutes } from "./routes/clientTokens.js";
 import { collaborativeAuthRoutes } from "./routes/collaborativeAuth.js";
+import { webhookRoutes } from "./routes/webhooks.js";
 import { environment } from "./services/highnote.js";
 
 // Detect a Highnote/GraphQL rate-limit error. The SDK surfaces these as a raw
@@ -254,8 +255,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   // config.public === true.
   await app.register(collaborativeAuthRoutes);
 
-  // Additional route modules (webhooks, etc.) are registered here as
-  // subsequent tasks add them.
+  // Public webhook receiver. Authenticated by the highnote-signature HMAC
+  // header (not JWT); the route opts out of auth via config.public === true
+  // and opts in to raw-body capture via config.rawBody === true.
+  await app.register(webhookRoutes);
 
   // Serve frontend static files in production, or in dev once the SPA has been
   // built locally. The path `../web/dist` resolves relative to the compiled

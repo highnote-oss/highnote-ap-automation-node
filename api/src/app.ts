@@ -21,6 +21,7 @@ import { meRoute } from "./routes/me.js";
 import { fundingAccountRoutes } from "./routes/fundingAccounts.js";
 import { invoiceRoutes } from "./routes/invoices.js";
 import { clientTokenRoutes } from "./routes/clientTokens.js";
+import { collaborativeAuthRoutes } from "./routes/collaborativeAuth.js";
 import { environment } from "./services/highnote.js";
 
 // Detect a Highnote/GraphQL rate-limit error. The SDK surfaces these as a raw
@@ -246,6 +247,12 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(fundingAccountRoutes);
   await app.register(invoiceRoutes);
   await app.register(clientTokenRoutes);
+
+  // Public collaborative-authorization receiver. Authenticated by the
+  // highnote-signature HMAC header, not JWT; the auth hook skips it because
+  // the route is registered under "/" (not "/api/") and also opts out via
+  // config.public === true.
+  await app.register(collaborativeAuthRoutes);
 
   // Additional route modules (webhooks, etc.) are registered here as
   // subsequent tasks add them.

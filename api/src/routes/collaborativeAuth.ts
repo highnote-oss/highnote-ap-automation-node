@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { and, desc, eq } from "drizzle-orm";
+import { z } from "zod";
 import {
   verifyCollaborativeAuthSignature,
   CollaborativeAuthorizationResponseCode,
@@ -8,8 +9,13 @@ import {
 } from "@highnote-oss/nodejs-sdk";
 import { db } from "../db/index.js";
 import { invoices, collabAuthDecisions } from "../db/schema.js";
+import * as collabAuthRegistration from "../services/collabAuthRegistration.js";
 import { getSigningKey } from "../services/collabAuthRegistration.js";
 import { IdParamsSchema } from "../types.js";
+
+const CollabAuthDecisionsQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(200).default(100),
+});
 
 /**
  * Highnote calls this endpoint with each authorization. The decision must
@@ -180,6 +186,47 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
         .from(collabAuthDecisions)
         .where(eq(collabAuthDecisions.invoiceId, request.params.id))
         .orderBy(desc(collabAuthDecisions.receivedAt))
+        .all();
+      return { decisions: rows };
+    },
+  );
+
+  // Public registration status (JWT-protected). Mirrors the webhook-status
+  // endpoint shape. Never exposes the signing-key secret; only a boolean.
+  typedApp.get(
+    "/api/collab-auth/status",
+    {
+      schema: {
+        tags: ["Collaborative Auth"],
+        description:
+          "Get the current collaborative-authorization endpoint registration status.",
+      },
+    },
+    async () => {
+      return collabAuthRegistration.getPublicStatus();
+    },
+  );
+
+  // Operator-wide decision log (JWT-protected). Returns every persisted
+  // decision row across all invoices owned by anyone — this is a single-user
+  // demo, so there is no per-user partitioning at the table level. Use the
+  // per-invoice variant above when scoping matters.
+  typedApp.get(
+    "/api/collab-auth/decisions",
+    {
+      schema: {
+        tags: ["Collaborative Auth"],
+        description:
+          "List recent collaborative-authorization decisions across all invoices (operator view).",
+        querystring: CollabAuthDecisionsQuerySchema,
+      },
+    },
+    async (request) => {
+      const rows = db
+        .select()
+        .from(collabAuthDecisions)
+        .orderBy(desc(collabAuthDecisions.receivedAt))
+        .limit(request.query.limit)
         .all();
       return { decisions: rows };
     },

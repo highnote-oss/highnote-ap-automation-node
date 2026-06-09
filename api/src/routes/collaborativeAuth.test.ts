@@ -16,12 +16,23 @@ import {
 
 const SECRET = "test-secret-do-not-use";
 
-const { getSigningKey } = vi.hoisted(() => ({
+const { getSigningKey, getPublicStatus } = vi.hoisted(() => ({
   getSigningKey: vi.fn<() => string | null>(() => SECRET),
+  getPublicStatus: vi.fn(() => ({
+    endpointId: "ep_test",
+    name: "bay19-auto-test",
+    status: "ACTIVE" as const,
+    registeredAt: "2024-01-01T00:00:00.000Z",
+    lastError: null,
+    hasSigningKey: true,
+    source: "auto" as const,
+    publicUrl: "https://example.test/collaborative-auth",
+  })),
 }));
 
 vi.mock("../services/collabAuthRegistration.js", () => ({
   getSigningKey,
+  getPublicStatus,
 }));
 
 import { sqlite, db } from "../db/index.js";
@@ -182,6 +193,17 @@ beforeAll(async () => {
 beforeEach(() => {
   getSigningKey.mockReset();
   getSigningKey.mockReturnValue(SECRET);
+  getPublicStatus.mockReset();
+  getPublicStatus.mockReturnValue({
+    endpointId: "ep_test",
+    name: "bay19-auto-test",
+    status: "ACTIVE",
+    registeredAt: "2024-01-01T00:00:00.000Z",
+    lastError: null,
+    hasSigningKey: true,
+    source: "auto",
+    publicUrl: "https://example.test/collaborative-auth",
+  });
   sqlite.exec("DELETE FROM collab_auth_decisions; DELETE FROM invoices; DELETE FROM users;");
   const [u] = db
     .insert(users)
@@ -419,5 +441,132 @@ describe("GET /api/invoices/:id/collab-decisions", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ decisions: [] });
+  });
+});
+
+describe("GET /api/collab-auth/status", () => {
+  it("requires a JWT", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/collab-auth/status",
+    });
+
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("returns the public registration status with hasSigningKey as a boolean", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/collab-auth/status",
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({
+      status: "ACTIVE",
+      endpointId: "ep_test",
+      name: "bay19-auto-test",
+    });
+    expect(typeof body.hasSigningKey).toBe("boolean");
+    expect(body.hasSigningKey).toBe(true);
+  });
+});
+
+describe("GET /api/collab-auth/decisions", () => {
+  it("requires a JWT", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/collab-auth/decisions",
+    });
+
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("returns an empty array when no decisions are persisted", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/collab-auth/decisions",
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ decisions: [] });
+  });
+
+  it("returns rows ordered by receivedAt DESC", async () => {
+    const invoiceId = seedInvoice();
+    db.insert(collabAuthDecisions)
+      .values({
+        invoiceId,
+        paymentCardId: "pc_test",
+        requestId: "req_old",
+        requestedAmountCents: 1_000,
+        decision: CollaborativeAuthorizationResponseCode.APPROVED,
+        rawPayload: "{}",
+        receivedAt: "2024-01-01T00:00:00.000Z",
+      })
+      .run();
+    db.insert(collabAuthDecisions)
+      .values({
+        invoiceId,
+        paymentCardId: "pc_test",
+        requestId: "req_new",
+        requestedAmountCents: 2_000,
+        decision:
+          CollaborativeAuthorizationResponseCode.INVALID_MERCHANT_CATEGORY_CODE,
+        rawPayload: "{}",
+        receivedAt: "2024-02-01T00:00:00.000Z",
+      })
+      .run();
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/collab-auth/decisions",
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.decisions.map((d: { requestId: string }) => d.requestId)).toEqual([
+      "req_new",
+      "req_old",
+    ]);
+  });
+
+  it("respects the limit query parameter", async () => {
+    const invoiceId = seedInvoice();
+    for (let i = 0; i < 5; i += 1) {
+      db.insert(collabAuthDecisions)
+        .values({
+          invoiceId,
+          paymentCardId: "pc_test",
+          requestId: `req_${i}`,
+          requestedAmountCents: 1_000,
+          decision: CollaborativeAuthorizationResponseCode.APPROVED,
+          rawPayload: "{}",
+          receivedAt: `2024-01-0${i + 1}T00:00:00.000Z`,
+        })
+        .run();
+    }
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/collab-auth/decisions?limit=2",
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().decisions).toHaveLength(2);
+  });
+
+  it("rejects a non-positive limit", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/collab-auth/decisions?limit=0",
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+
+    expect(res.statusCode).toBe(400);
   });
 });

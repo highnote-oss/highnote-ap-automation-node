@@ -189,6 +189,129 @@ export interface TopUpInput {
   currencyCode: SupportedCurrencyCode;
 }
 
+/**
+ * Mirror of the public CA registration status returned by
+ * `GET /api/collab-auth/status`. Source: `PublicStatus` in
+ * `api/src/services/collabAuthRegistration.ts`. Keep in lockstep manually.
+ */
+export interface CollabAuthStatus {
+  endpointId: string | null;
+  name: string | null;
+  status: string;
+  registeredAt: string | null;
+  lastError: string | null;
+  hasSigningKey: boolean;
+  source: string;
+  publicUrl: string | null;
+}
+
+/**
+ * Mirror of the public webhook registration status returned by
+ * `GET /api/webhooks/status`. Source: `PublicStatus` in
+ * `api/src/services/webhookRegistration.ts`. Keep in lockstep manually.
+ */
+export interface WebhooksStatus {
+  targetId: string | null;
+  name: string | null;
+  status: string;
+  registeredAt: string | null;
+  lastError: string | null;
+  hasSecret: boolean;
+  source: string;
+  subscriptionCount: number;
+  publicUrl: string | null;
+}
+
+/**
+ * Response shape from `GET /api/webhooks/events`.
+ */
+export interface WebhooksEventsResponse {
+  events: WebhookEvent[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Curated subset of `MerchantCategory` from `@highnote-oss/nodejs-sdk`. The
+ * SDK enum has hundreds of entries; we ship a small list the operator can use
+ * from the Simulate page to exercise the CA decision tree's match/mismatch
+ * paths against an invoice's `expectedMcc`.
+ *
+ * The `mcc` field is the typical numeric MCC Highnote emits server-side for
+ * each category — used by the operator to align with (or deliberately
+ * mismatch) the invoice's `expectedMcc`. Keep enum names in lockstep with the
+ * SDK manually; the web package does not depend on the SDK.
+ */
+export const SIMULATE_CATEGORY_OPTIONS = [
+  {
+    value: "GROCERY_STORES_SUPERMARKETS",
+    label: "Grocery stores / supermarkets",
+    mcc: "5411",
+  },
+  {
+    value: "EATING_PLACES_RESTAURANTS",
+    label: "Eating places & restaurants",
+    mcc: "5812",
+  },
+  {
+    value: "FAST_FOOD_RESTAURANTS",
+    label: "Fast food restaurants",
+    mcc: "5814",
+  },
+  {
+    value: "COMPUTER_SOFTWARE_STORES",
+    label: "Computer software stores",
+    mcc: "5734",
+  },
+  {
+    value: "STATIONERY_STORES_OFFICE_AND_SCHOOL_SUPPLY_STORES",
+    label: "Stationery / office / school supplies",
+    mcc: "5943",
+  },
+  {
+    value: "ADVERTISING_SERVICES",
+    label: "Advertising services",
+    mcc: "7311",
+  },
+  {
+    value: "PROFESSIONAL_SERVICES",
+    label: "Professional services",
+    mcc: "8999",
+  },
+  {
+    value: "MISCELLANEOUS_BUSINESS_SERVICES",
+    label: "Miscellaneous business services",
+    mcc: "7399",
+  },
+  {
+    value: "LEGAL_SERVICES_ATTORNEYS",
+    label: "Legal services / attorneys",
+    mcc: "8111",
+  },
+  {
+    value: "MEDICAL_AND_DENTAL_LABS",
+    label: "Medical & dental labs",
+    mcc: "8071",
+  },
+] as const;
+
+export type SimulateCategoryValue =
+  (typeof SIMULATE_CATEGORY_OPTIONS)[number]["value"];
+
+/**
+ * Body for `POST /api/simulate/authorize`. Mirrors
+ * `SimulateAuthorizeBodySchema` in `api/src/routes/simulate.ts`. `merchantName`
+ * is capped at 25 characters server-side to match Highnote's
+ * `MerchantDetailsInput.name` limit.
+ */
+export interface SimulateAuthorizeInput {
+  invoiceId: string;
+  amountCents: number;
+  category: SimulateCategoryValue;
+  merchantName: string;
+}
+
 export const api = {
   signup: (email: string, password: string): Promise<AuthResponse> =>
     request("/auth/signup", { method: "POST", body: JSON.stringify({ email, password }) }),
@@ -247,6 +370,34 @@ export const api = {
       request(`/admin/funding/${id}/topup`, {
         method: "POST",
         body: JSON.stringify({ amountCents, currencyCode }),
+      }),
+  },
+
+  webhooks: {
+    status: (): Promise<WebhooksStatus> => request("/webhooks/status"),
+    events: async (limit = 100): Promise<WebhookEvent[]> => {
+      const body = (await request(`/webhooks/events?limit=${limit}`)) as {
+        events: WebhookEvent[];
+      };
+      return body.events;
+    },
+  },
+
+  collabAuth: {
+    status: (): Promise<CollabAuthStatus> => request("/collab-auth/status"),
+    decisions: async (limit = 100): Promise<CollabAuthDecision[]> => {
+      const body = (await request(
+        `/collab-auth/decisions?limit=${limit}`
+      )) as { decisions: CollabAuthDecision[] };
+      return body.decisions;
+    },
+  },
+
+  simulate: {
+    authorize: (body: SimulateAuthorizeInput): Promise<unknown> =>
+      request("/simulate/authorize", {
+        method: "POST",
+        body: JSON.stringify(body),
       }),
   },
 };

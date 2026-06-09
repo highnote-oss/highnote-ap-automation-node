@@ -40,6 +40,16 @@ jobs:
       - name: Test
         run: npm test
         working-directory: api
+        env:
+          # services/highnote.ts validates these env vars at module load (it's
+          # the boot-time gate for misconfigured deployments). All test files
+          # mock the Highnote SDK or the service itself, so the values are
+          # never used in an actual API call -- they just need to be present
+          # so the module import doesn't throw.
+          HIGHNOTE_API_KEY: test
+          HIGHNOTE_CARD_PRODUCT_ID: test
+          HIGHNOTE_APPLICATION_ID: test
+          JWT_SECRET: test-jwt-secret-please-replace-in-production
 
   web:
     name: Web — typecheck & build

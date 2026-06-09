@@ -24,6 +24,7 @@ import { clientTokenRoutes } from "./routes/clientTokens.js";
 import { collaborativeAuthRoutes } from "./routes/collaborativeAuth.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { payByLinkRoutes } from "./routes/payByLink.js";
+import { simulateRoutes } from "./routes/simulate.js";
 import { environment } from "./services/highnote.js";
 
 // Detect a Highnote/GraphQL rate-limit error. The SDK surfaces these as a raw
@@ -265,6 +266,11 @@ export async function buildApp(): Promise<FastifyInstance> {
   // for an already-issued card; the GET is public (vendor visits the link in a
   // browser) and opts out of auth via config.public === true.
   await app.register(payByLinkRoutes);
+
+  // Test-environment simulation tools. Operator-authenticated (JWT); guarded
+  // by the SDK itself via `guardEnvironment` so it no-ops outside the test
+  // environment.
+  await app.register(simulateRoutes);
 
   // Serve frontend static files in production, or in dev once the SPA has been
   // built locally. The path `../web/dist` resolves relative to the compiled

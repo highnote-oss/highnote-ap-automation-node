@@ -1,0 +1,15 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      SQLITE_PATH: /app/data/app.db
+    volumes:
+      # Persist the SQLite database across container restarts.
+      - ./data:/app/data
+    restart: unless-stopped

@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: highnote-ap-automation
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    # Persist the SQLite database across deploys.
+    disk:
+      name: data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      # Secrets — set manually in the Render dashboard.
+      - key: HIGHNOTE_API_KEY
+        sync: false
+      - key: HIGHNOTE_CARD_PRODUCT_ID
+        sync: false
+      - key: HIGHNOTE_APPLICATION_ID
+        sync: false
+      - key: WEBHOOK_PUBLIC_URL
+        sync: false
+      # JWT signing secret — let Render mint one at deploy time.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: HIGHNOTE_ENVIRONMENT
+        value: test
+      - key: SQLITE_PATH
+        value: /app/data/app.db
+      - key: NODE_ENV
+        value: production

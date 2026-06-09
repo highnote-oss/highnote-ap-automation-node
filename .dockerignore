@@ -1,0 +1,13 @@
+**/node_modules
+**/dist
+**/.env
+.git
+.github
+.claude
+.superpowers
+docs
+mcp-server
+*.md
+*.db
+*.db-shm
+*.db-wal

@@ -1,0 +1,60 @@
+name: Close external pull requests
+
+# This repo is a read-only public example. External contributors cannot
+# land changes via PRs; this workflow politely closes any PR opened by
+# someone without write access. Maintainers (OWNER / MEMBER / COLLABORATOR)
+# and bots (e.g., Dependabot) are exempt.
+#
+# Uses `pull_request_target` so the workflow runs with write permissions
+# in the context of the base repo even for PRs from forks. The workflow
+# does not check out or execute any code from the PR, so this is safe.
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  close:
+    name: Auto-close external PR
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.pull_request.user.type != 'Bot' &&
+      github.event.pull_request.author_association != 'OWNER' &&
+      github.event.pull_request.author_association != 'MEMBER' &&
+      github.event.pull_request.author_association != 'COLLABORATOR'
+    steps:
+      - name: Comment and close
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const number = context.payload.pull_request.number;
+            const author = context.payload.pull_request.user.login;
+
+            const body = [
+              `Hi @${author}, thanks for taking the time to look at this example!`,
+              ``,
+              `This repository is a **read-only public example** maintained by Highnote. We do not accept external pull requests. Closing this PR automatically — please do not take it personally.`,
+              ``,
+              `If you found a security issue with this example, please use [GitHub's private vulnerability reporting form](https://github.com/${owner}/${repo}/security/advisories/new).`,
+              ``,
+              `For everything else, contact your Highnote account team or support channel. Maintainers will still see any feedback you leave on this closed PR.`,
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: number,
+              body,
+            });
+
+            await github.rest.pulls.update({
+              owner,
+              repo,
+              pull_number: number,
+              state: "closed",
+            });

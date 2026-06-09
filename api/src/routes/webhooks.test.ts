@@ -7,7 +7,10 @@ import {
 } from "fastify-type-provider-zod";
 import { createHmac, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { NotificationEventName } from "@highnote-oss/nodejs-sdk";
+import {
+  Iso4217Alpha3SupportedCurrency,
+  NotificationEventName,
+} from "@highnote-oss/nodejs-sdk";
 
 const SECRET = "test-webhook-secret";
 
@@ -107,11 +110,13 @@ interface BuildEventOpts {
   cardId?: string;
   eventName?: NotificationEventName;
   approvedValue?: number;
-  approvedCurrency?: string;
+  approvedCurrency?: Iso4217Alpha3SupportedCurrency;
   eventId?: string;
 }
 
 function buildEventPayload(opts: BuildEventOpts = {}): Record<string, unknown> {
+  const currencyCode =
+    opts.approvedCurrency ?? Iso4217Alpha3SupportedCurrency.USD;
   return {
     id: opts.eventId ?? "evt_" + randomUUID(),
     name: opts.eventName ?? NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT,
@@ -124,11 +129,11 @@ function buildEventPayload(opts: BuildEventOpts = {}): Record<string, unknown> {
       cardId: opts.cardId ?? "pc_test",
       approvedAmount: {
         value: opts.approvedValue ?? 5_000,
-        currencyCode: opts.approvedCurrency ?? "USD",
+        currencyCode,
       },
       requestedAmount: {
         value: opts.approvedValue ?? 5_000,
-        currencyCode: opts.approvedCurrency ?? "USD",
+        currencyCode,
       },
     },
     extensions: { signatureTimestamp: Date.now() },
@@ -193,7 +198,7 @@ function seedInvoice(
       vendorEmail: "acme@example.com",
       invoiceNumber: "INV-1",
       amountCents: 10_000,
-      currencyCode: "USD",
+      currencyCode: Iso4217Alpha3SupportedCurrency.USD,
       status: "CARD_ISSUED" satisfies InvoiceStatus,
       cardId: "pc_test",
       ...overrides,
@@ -260,7 +265,7 @@ describe("POST /api/webhooks — invoice state transitions", () => {
     const invoiceId = seedInvoice({
       status: "AUTHORIZED" satisfies InvoiceStatus,
       amountCents: 10_000,
-      currencyCode: "USD",
+      currencyCode: Iso4217Alpha3SupportedCurrency.USD,
     });
 
     const { statusCode } = await postSigned(
@@ -283,7 +288,7 @@ describe("POST /api/webhooks — invoice state transitions", () => {
     const invoiceId = seedInvoice({
       status: "AUTHORIZED" satisfies InvoiceStatus,
       amountCents: 10_000,
-      currencyCode: "USD",
+      currencyCode: Iso4217Alpha3SupportedCurrency.USD,
     });
 
     const { statusCode } = await postSigned(
@@ -348,7 +353,7 @@ describe("POST /api/webhooks — invoice state transitions", () => {
     const invoiceId = seedInvoice({
       status: "AUTHORIZED" satisfies InvoiceStatus,
       amountCents: 10_000,
-      currencyCode: "USD",
+      currencyCode: Iso4217Alpha3SupportedCurrency.USD,
     });
 
     // Force cards.close to throw — dispatch must have already logged the event
@@ -384,7 +389,7 @@ describe("POST /api/webhooks — invoice state transitions", () => {
     seedInvoice({
       status: "RECONCILED" satisfies InvoiceStatus,
       amountCents: 10_000,
-      currencyCode: "USD",
+      currencyCode: Iso4217Alpha3SupportedCurrency.USD,
     });
 
     const { statusCode } = await postSigned(
@@ -410,7 +415,10 @@ describe("POST /api/webhooks — invoice state transitions", () => {
       data: {
         __typename: "PaymentCardAuthorizationApprovedEvent",
         // cardId intentionally omitted.
-        approvedAmount: { value: 5_000, currencyCode: "USD" },
+        approvedAmount: {
+          value: 5_000,
+          currencyCode: Iso4217Alpha3SupportedCurrency.USD,
+        },
       },
       // The SDK signature verifier requires a recent signatureTimestamp; it
       // is unrelated to the cardId branch we're exercising here.

@@ -4,7 +4,10 @@ import fastifyRawBody from "fastify-raw-body";
 import { createHmac, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { eq } from "drizzle-orm";
-import { CollaborativeAuthorizationResponseCode } from "@highnote-oss/nodejs-sdk";
+import {
+  CollaborativeAuthorizationResponseCode,
+  Iso4217Alpha3SupportedCurrency,
+} from "@highnote-oss/nodejs-sdk";
 
 const SECRET = "test-secret-do-not-use";
 
@@ -95,9 +98,18 @@ function buildCaRequestBody(opts: BuildRequestOpts = {}): Record<string, unknown
         id: opts.requestId ?? "req_" + randomUUID(),
         transaction: { id: opts.transactionId ?? "tx_1" },
         paymentCard: { id: opts.cardId ?? "pc_test" },
-        transactionAmount: { value: requestedAmount, currencyCode: "USD" },
-        settlementAmount: { value: requestedAmount, currencyCode: "USD" },
-        requestedAmount: { value: requestedAmount, currencyCode: "USD" },
+        transactionAmount: {
+          value: requestedAmount,
+          currencyCode: Iso4217Alpha3SupportedCurrency.USD,
+        },
+        settlementAmount: {
+          value: requestedAmount,
+          currencyCode: Iso4217Alpha3SupportedCurrency.USD,
+        },
+        requestedAmount: {
+          value: requestedAmount,
+          currencyCode: Iso4217Alpha3SupportedCurrency.USD,
+        },
         merchantDetails: {
           merchantId: "m_1",
           merchantCategoryCode: opts.merchantCategoryCode ?? "5411",
@@ -170,7 +182,7 @@ function seedInvoice(overrides: Partial<typeof invoices.$inferInsert> = {}): str
       vendorEmail: "acme@example.com",
       invoiceNumber: "INV-1",
       amountCents: 10_000,
-      currencyCode: "USD",
+      currencyCode: Iso4217Alpha3SupportedCurrency.USD,
       status: "CARD_ISSUED" satisfies InvoiceStatus,
       cardId: "pc_test",
       ...overrides,

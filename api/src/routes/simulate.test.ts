@@ -89,7 +89,10 @@ let tokenA: string;
 const FIXTURE_EVENT = {
   __typename: "AuthorizationEvent",
   id: "ae_fixture",
-  authorizedAmount: { value: 5_000, currencyCode: "USD" },
+  authorizedAmount: {
+    value: 5_000,
+    currencyCode: Iso4217Alpha3SupportedCurrency.USD,
+  },
 };
 
 beforeAll(async () => {
@@ -130,7 +133,7 @@ function seedInvoice(
       vendorEmail: "billing@acme.test",
       invoiceNumber: "INV-1",
       amountCents: 10_000,
-      currencyCode: "USD",
+      currencyCode: Iso4217Alpha3SupportedCurrency.USD,
       status: "CARD_ISSUED" satisfies InvoiceStatus,
       cardId: "pc_test",
       ...overrides,
@@ -190,7 +193,9 @@ describe("POST /api/simulate/authorize", () => {
   });
 
   it("forces currencyCode from the invoice row, ignoring any body value", async () => {
-    const id = seedInvoice(userAId, { currencyCode: "USD" });
+    const id = seedInvoice(userAId, {
+      currencyCode: Iso4217Alpha3SupportedCurrency.USD,
+    });
 
     await app.inject({
       method: "POST",

@@ -25,6 +25,7 @@ import { payByLinkRoutes } from "./payByLink.js";
 import {
   HighnoteUserError,
   HighnoteAccessDeniedError,
+  Iso4217Alpha3SupportedCurrency,
 } from "@highnote-oss/nodejs-sdk";
 import type { InvoiceStatus } from "../types.js";
 
@@ -123,7 +124,7 @@ function seedInvoice(
       vendorEmail: "billing@acme.test",
       invoiceNumber: "INV-1",
       amountCents: 10_000,
-      currencyCode: "USD",
+      currencyCode: Iso4217Alpha3SupportedCurrency.USD,
       status: "CARD_ISSUED" satisfies InvoiceStatus,
       cardId: "pc_test",
       ...overrides,
@@ -290,7 +291,7 @@ describe("GET /api/pay/:slug (public)", () => {
     const { slug } = seedWithLink({
       vendorName: "Vendor Co",
       amountCents: 25_000,
-      currencyCode: "USD",
+      currencyCode: Iso4217Alpha3SupportedCurrency.USD,
       invoiceNumber: "INV-PAY-1",
     });
 
@@ -304,7 +305,7 @@ describe("GET /api/pay/:slug (public)", () => {
     expect(res.json()).toEqual({
       vendorName: "Vendor Co",
       amountCents: 25_000,
-      currencyCode: "USD",
+      currencyCode: Iso4217Alpha3SupportedCurrency.USD,
       invoiceNumber: "INV-PAY-1",
       clientToken: "ct_persisted_value",
     });

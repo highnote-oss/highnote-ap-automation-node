@@ -32,7 +32,10 @@ import { users, invoices } from "../db/schema.js";
 import { registerAuthHook, JWT_SECRET } from "../middleware/auth.js";
 import { invoiceRoutes } from "./invoices.js";
 import { applicationId } from "../services/highnote.js";
-import { HighnoteUserError } from "@highnote-oss/nodejs-sdk";
+import {
+  HighnoteUserError,
+  Iso4217Alpha3SupportedCurrency,
+} from "@highnote-oss/nodejs-sdk";
 import type { InvoiceStatus } from "../types.js";
 
 function buildTestApp(): FastifyInstance {
@@ -89,7 +92,7 @@ const validBody = {
   vendorEmail: "billing@acme.test",
   invoiceNumber: "INV-001",
   amountCents: 12_345,
-  currencyCode: "USD",
+  currencyCode: Iso4217Alpha3SupportedCurrency.USD,
 };
 
 let app: FastifyInstance;

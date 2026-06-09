@@ -66,12 +66,12 @@ export async function simulateRoutes(app: FastifyInstance) {
       }
 
       try {
-        // The invoice's currencyCode column is a free-form text field in
-        // SQLite, but it is only ever written from the validated invoice-
-        // creation route, which constrains it to `Iso4217Alpha3SupportedCurrency`.
-        // The cast keeps the SDK call fully typed without re-validating at
-        // every call site. (Follow-up: tighten this with a runtime parse if
-        // we ever allow currency to be set from less-trusted sources.)
+        // The invoice's currencyCode column is `text` in SQLite, so Drizzle
+        // types it as `string` on read. The write side is locked down:
+        // `CreateInvoiceBodySchema` validates the field as
+        // `z.nativeEnum(Iso4217Alpha3SupportedCurrency)`, so any value that
+        // reaches this row is already a valid enum member. The cast bridges
+        // the Drizzle string type back to the SDK enum without re-parsing.
         const event = await highnote.test.transactions.authorize({
           cardId: row.cardId,
           amount: {

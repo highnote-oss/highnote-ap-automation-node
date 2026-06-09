@@ -1,6 +1,7 @@
 /** Zod schemas for request validation and OpenAPI spec generation. */
 
 import { z } from "zod";
+import { Iso4217Alpha3SupportedCurrency } from "@highnote-oss/nodejs-sdk";
 
 // --- Auth ---
 
@@ -28,7 +29,9 @@ export const CreateInvoiceBodySchema = z.object({
   vendorEmail: z.string().email(),
   invoiceNumber: z.string().min(1).max(100),
   amountCents: z.number().int().positive(),
-  currencyCode: z.string().length(3).default("USD"),
+  currencyCode: z
+    .nativeEnum(Iso4217Alpha3SupportedCurrency)
+    .default(Iso4217Alpha3SupportedCurrency.USD),
   dueDate: z.string().optional(),
   expectedMcc: z.string().regex(/^\d{4}$/).optional(),
 });

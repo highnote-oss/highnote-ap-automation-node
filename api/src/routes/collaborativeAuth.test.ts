@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyRawBody from "fastify-raw-body";
+import {
+  serializerCompiler,
+  validatorCompiler,
+} from "fastify-type-provider-zod";
+import jwt from "jsonwebtoken";
 import { createHmac, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { eq } from "drizzle-orm";
@@ -21,8 +26,16 @@ vi.mock("../services/collabAuthRegistration.js", () => ({
 
 import { sqlite, db } from "../db/index.js";
 import { users, invoices, collabAuthDecisions } from "../db/schema.js";
+import { registerAuthHook, JWT_SECRET } from "../middleware/auth.js";
 import { collaborativeAuthRoutes } from "./collaborativeAuth.js";
 import type { InvoiceStatus } from "../types.js";
+
+function signToken(userId: number, email: string): string {
+  return jwt.sign({ userId, email }, JWT_SECRET, {
+    algorithm: "HS256",
+    expiresIn: "1h",
+  });
+}
 
 function ensureTablesForTest(): void {
   sqlite.exec(`
@@ -71,12 +84,15 @@ function ensureTablesForTest(): void {
 
 async function buildTestApp(): Promise<FastifyInstance> {
   const app = Fastify();
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
   await app.register(fastifyRawBody, {
     field: "rawBody",
     encoding: "utf8",
     runFirst: true,
     global: false,
   });
+  registerAuthHook(app);
   await app.register(collaborativeAuthRoutes);
   await app.ready();
   return app;
@@ -154,6 +170,9 @@ async function waitForDecisionPersist(): Promise<void> {
 
 let app: FastifyInstance;
 let userId: number;
+let otherUserId: number;
+let tokenA: string;
+let tokenB: string;
 
 beforeAll(async () => {
   ensureTablesForTest();
@@ -170,6 +189,14 @@ beforeEach(() => {
     .returning()
     .all();
   userId = u.id;
+  const [other] = db
+    .insert(users)
+    .values({ email: "other@example.com", passwordHash: "x" })
+    .returning()
+    .all();
+  otherUserId = other.id;
+  tokenA = signToken(userId, u.email);
+  tokenB = signToken(otherUserId, other.email);
 });
 
 function seedInvoice(overrides: Partial<typeof invoices.$inferInsert> = {}): string {
@@ -312,5 +339,85 @@ describe("POST /collaborative-auth — latency budget", () => {
 
     expect(statusCode).toBe(200);
     expect(elapsedMs).toBeLessThan(200);
+  });
+});
+
+describe("GET /api/invoices/:id/collab-decisions", () => {
+  it("returns the invoice's decisions ordered by receivedAt DESC for the owner", async () => {
+    const invoiceId = seedInvoice();
+    db.insert(collabAuthDecisions)
+      .values({
+        invoiceId,
+        paymentCardId: "pc_test",
+        requestId: "req_old",
+        requestedAmountCents: 1_000,
+        merchantCategoryCode: "5411",
+        decision: CollaborativeAuthorizationResponseCode.APPROVED,
+        reason: "first",
+        rawPayload: "{}",
+        receivedAt: "2024-01-01T00:00:00.000Z",
+      })
+      .run();
+    db.insert(collabAuthDecisions)
+      .values({
+        invoiceId,
+        paymentCardId: "pc_test",
+        requestId: "req_new",
+        requestedAmountCents: 2_000,
+        merchantCategoryCode: "5732",
+        decision:
+          CollaborativeAuthorizationResponseCode.INVALID_MERCHANT_CATEGORY_CODE,
+        reason: "second",
+        rawPayload: "{}",
+        receivedAt: "2024-02-01T00:00:00.000Z",
+      })
+      .run();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/invoices/${invoiceId}/collab-decisions`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.decisions).toHaveLength(2);
+    expect(body.decisions[0].requestId).toBe("req_new");
+    expect(body.decisions[1].requestId).toBe("req_old");
+  });
+
+  it("returns 404 when the invoice belongs to another user (no existence leak)", async () => {
+    const invoiceId = seedInvoice();
+    db.insert(collabAuthDecisions)
+      .values({
+        invoiceId,
+        paymentCardId: "pc_test",
+        requestId: "req_leak",
+        requestedAmountCents: 1_000,
+        decision: CollaborativeAuthorizationResponseCode.APPROVED,
+        rawPayload: "{}",
+      })
+      .run();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/invoices/${invoiceId}/collab-decisions`,
+      headers: { authorization: `Bearer ${tokenB}` },
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("returns an empty array when the invoice has no decisions", async () => {
+    const invoiceId = seedInvoice();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/invoices/${invoiceId}/collab-decisions`,
+      headers: { authorization: `Bearer ${tokenA}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ decisions: [] });
   });
 });

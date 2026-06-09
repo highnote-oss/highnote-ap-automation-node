@@ -1,6 +1,6 @@
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import {
   NotificationEventName,
@@ -11,6 +11,7 @@ import { invoices, webhookEvents } from "../db/schema.js";
 import { highnote } from "../services/highnote.js";
 import * as webhookRegistration from "../services/webhookRegistration.js";
 import {
+  IdParamsSchema,
   WebhookEventsQuerySchema,
   WebhookRegisterBodySchema,
   type InvoiceStatus,
@@ -273,6 +274,44 @@ export async function webhookRoutes(app: FastifyInstance) {
         limit,
         offset,
       });
+    },
+  );
+
+  // GET /api/invoices/:id/webhook-events — List webhook events for one of the
+  // operator's own invoices. The cross-user guard (join on invoices.userId)
+  // returns 404 indistinguishably for unknown ids and other-user ids.
+  typedApp.get(
+    "/api/invoices/:id/webhook-events",
+    {
+      schema: {
+        tags: ["Webhooks"],
+        description:
+          "List webhook events that landed for the given invoice (own invoices only).",
+        params: IdParamsSchema,
+      },
+    },
+    async (request, reply) => {
+      const invoice = db
+        .select()
+        .from(invoices)
+        .where(
+          and(
+            eq(invoices.id, request.params.id),
+            eq(invoices.userId, request.user.id),
+          ),
+        )
+        .get();
+      if (!invoice) {
+        return reply.status(404).send({ error: "Invoice not found" });
+      }
+
+      const events = db
+        .select()
+        .from(webhookEvents)
+        .where(eq(webhookEvents.invoiceId, request.params.id))
+        .orderBy(desc(webhookEvents.receivedAt))
+        .all();
+      return { events };
     },
   );
 

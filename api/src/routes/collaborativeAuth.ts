@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import type { ZodTypeProvider } from "fastify-type-provider-zod";
+import { and, desc, eq } from "drizzle-orm";
 import {
   verifyCollaborativeAuthSignature,
   CollaborativeAuthorizationResponseCode,
@@ -8,6 +9,7 @@ import {
 import { db } from "../db/index.js";
 import { invoices, collabAuthDecisions } from "../db/schema.js";
 import { getSigningKey } from "../services/collabAuthRegistration.js";
+import { IdParamsSchema } from "../types.js";
 
 /**
  * Highnote calls this endpoint with each authorization. The decision must
@@ -140,6 +142,46 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
         responseCode: decision.code,
       };
       return reply.send(response);
+    },
+  );
+
+  // List CA decisions for one of the operator's own invoices. Auth-required
+  // and ownership-guarded — selecting a decision row leaks no metadata about
+  // someone else's invoice (cross-user requests return 404 indistinguishably
+  // from unknown ids).
+  const typedApp = app.withTypeProvider<ZodTypeProvider>();
+  typedApp.get(
+    "/api/invoices/:id/collab-decisions",
+    {
+      schema: {
+        tags: ["Collaborative Auth"],
+        description:
+          "List collaborative-auth decision rows for the given invoice (own invoices only).",
+        params: IdParamsSchema,
+      },
+    },
+    async (request, reply) => {
+      const invoice = db
+        .select()
+        .from(invoices)
+        .where(
+          and(
+            eq(invoices.id, request.params.id),
+            eq(invoices.userId, request.user.id),
+          ),
+        )
+        .get();
+      if (!invoice) {
+        return reply.status(404).send({ error: "Invoice not found" });
+      }
+
+      const rows = db
+        .select()
+        .from(collabAuthDecisions)
+        .where(eq(collabAuthDecisions.invoiceId, request.params.id))
+        .orderBy(desc(collabAuthDecisions.receivedAt))
+        .all();
+      return { decisions: rows };
     },
   );
 }

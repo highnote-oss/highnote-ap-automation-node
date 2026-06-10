@@ -4,14 +4,45 @@ function getToken(): string | null {
   return localStorage.getItem("auth_token");
 }
 
+/**
+ * Auth-protected endpoints that should trigger a hard logout on 401. The
+ * `/auth/login` and `/auth/signup` paths intentionally return 401 on bad
+ * credentials -- those are NOT session-expired signals, just normal login
+ * failures, so we exclude them.
+ */
+function shouldTreatAsSessionExpired(path: string): boolean {
+  return !path.startsWith("/auth/");
+}
+
 async function request(path: string, init: RequestInit = {}): Promise<any> {
   const token = getToken();
+  // Only advertise application/json when we are actually sending a body.
+  // Fastify's JSON parser rejects an empty body when content-type says JSON
+  // (FST_ERR_CTP_EMPTY_JSON_BODY), which breaks POSTs that have no payload
+  // such as /cancel, /pay-link, and /card-viewer-token.
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(init.body !== undefined && init.body !== null
+      ? { "Content-Type": "application/json" }
+      : {}),
     ...(init.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
+  if (res.status === 401 && shouldTreatAsSessionExpired(path)) {
+    // Session expired or token invalidated server-side. Clear local state,
+    // stop any in-flight polling by hard-navigating to /login, and surface
+    // a hint via query string so the login page can explain why.
+    //
+    // The hard reload is intentional: it kills the React tree (and any
+    // React Query polling) atomically instead of waiting for individual
+    // queries to settle.
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_user");
+    if (window.location.pathname !== "/login") {
+      window.location.assign("/login?reason=expired");
+    }
+    throw new Error("Session expired");
+  }
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`HTTP ${res.status}: ${body}`);

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { ErrorMessage } from "../components/ErrorMessage";
 
@@ -10,6 +10,10 @@ export function LoginPage() {
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // Surfaced by client.ts when an authenticated request returns 401 -- the
+  // token was expired or revoked. Cleared after the next successful login.
+  const sessionExpired = searchParams.get("reason") === "expired";
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -45,6 +49,12 @@ export function LoginPage() {
           <p className="mb-6 text-center text-sm font-medium text-gray-700">
             Sign In
           </p>
+
+          {sessionExpired && !error && (
+            <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Your session expired. Please sign in again.
+            </div>
+          )}
 
           {error && (
             <div className="mb-4">

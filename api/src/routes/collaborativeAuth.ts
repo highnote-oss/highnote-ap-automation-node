@@ -207,6 +207,25 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
     },
   );
 
+  // POST /api/collab-auth/register -- Re-run auto-registration (JWT-protected).
+  // Useful when the activation probe failed during a cold-start or the
+  // previously-stored signing key is no longer valid.  The operator hits the
+  // Re-register button on the Collab Auth page and lands here.
+  typedApp.post(
+    "/api/collab-auth/register",
+    {
+      schema: {
+        tags: ["Collaborative Auth"],
+        description:
+          "Re-run collaborative-authorization endpoint auto-registration. Removes prior bay19-auto-* endpoints and registers a fresh one. Returns the new public status.",
+      },
+    },
+    async () => {
+      await collabAuthRegistration.init();
+      return collabAuthRegistration.getPublicStatus();
+    },
+  );
+
   // Operator-wide decision log (JWT-protected). Returns every persisted
   // decision row across all invoices owned by anyone — this is a single-user
   // demo, so there is no per-user partitioning at the table level. Use the

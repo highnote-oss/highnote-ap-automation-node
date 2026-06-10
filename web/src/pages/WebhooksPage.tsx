@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Navigate, Link } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../context/AuthContext";
 import {
   api,
@@ -125,7 +125,41 @@ function StatusCard() {
           Last error: {status.lastError}
         </p>
       )}
+
+      <div className="mt-4 flex items-center justify-end">
+        <ReregisterButton />
+      </div>
     </section>
+  );
+}
+
+function ReregisterButton() {
+  const queryClient = useQueryClient();
+  const mutation = useMutation<WebhooksStatus, Error>({
+    mutationFn: api.webhooks.register,
+    onSuccess: (data) => {
+      queryClient.setQueryData(WEBHOOKS_STATUS_KEY, data);
+      queryClient.invalidateQueries({ queryKey: WEBHOOKS_EVENTS_KEY });
+    },
+  });
+
+  return (
+    <div className="flex items-center gap-3">
+      {mutation.isError && (
+        <span className="text-xs text-red-600">
+          {mutation.error.message}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={() => mutation.mutate()}
+        disabled={mutation.isPending}
+        className="rounded-lg border border-indigo-300 bg-white px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+        title="Remove any prior auto-registered notification target and register a fresh one with Highnote."
+      >
+        {mutation.isPending ? "Re-registering..." : "Re-register"}
+      </button>
+    </div>
   );
 }
 

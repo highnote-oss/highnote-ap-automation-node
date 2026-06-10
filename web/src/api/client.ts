@@ -412,6 +412,9 @@ export const api = {
       };
       return body.events;
     },
+    // POST with no body re-runs auto-registration on the backend.
+    register: (): Promise<WebhooksStatus> =>
+      request("/webhooks/register", { method: "POST" }),
   },
 
   collabAuth: {
@@ -422,6 +425,8 @@ export const api = {
       )) as { decisions: CollabAuthDecision[] };
       return body.decisions;
     },
+    register: (): Promise<CollabAuthStatus> =>
+      request("/collab-auth/register", { method: "POST" }),
   },
 
   simulate: {

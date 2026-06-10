@@ -1,31 +1,34 @@
-import { useEffect, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { api, type Invoice, type PayLinkResponse } from "../api/client";
+import { useEffect, useState } from "react";
+import type { Invoice, PayLinkResponse } from "../api/client";
 import { LoadingSpinner } from "./LoadingSpinner";
 import { ErrorMessage } from "./ErrorMessage";
 
 interface SendToVendorModalProps {
   invoice: Invoice;
+  /**
+   * Mutation state lifted to the parent so that the click that opens the
+   * modal also fires the pay-link mutation. Keeping the mutation outside the
+   * modal sidesteps the React 19 StrictMode + useEffect + useMutation
+   * interaction that left the modal stuck in "Generating..." even after the
+   * server returned the slug.
+   */
+  isPending: boolean;
+  isError: boolean;
+  errorMessage?: string;
+  payLink: PayLinkResponse | null;
   onClose: () => void;
 }
 
 const COPY_FEEDBACK_MS = 2000;
 
-export function SendToVendorModal({ invoice, onClose }: SendToVendorModalProps) {
-  const startedRef = useRef(false);
-
-  const payLinkMutation = useMutation<PayLinkResponse, Error>({
-    mutationFn: () => api.invoices.payLink(invoice.id),
-  });
-
-  // Auto-fire the mutation on open. `useRef` prevents Strict-Mode's double
-  // invoke from minting two slugs in development.
-  useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-    payLinkMutation.mutate();
-  }, [payLinkMutation]);
-
+export function SendToVendorModal({
+  invoice,
+  isPending,
+  isError,
+  errorMessage,
+  payLink,
+  onClose,
+}: SendToVendorModalProps) {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -76,16 +79,16 @@ export function SendToVendorModal({ invoice, onClose }: SendToVendorModalProps) 
           </button>
         </div>
 
-        {payLinkMutation.isPending && (
-          <LoadingSpinner message="Generating pay link..." />
+        {isPending && <LoadingSpinner message="Generating pay link..." />}
+
+        {isError && (
+          <ErrorMessage
+            message={errorMessage ?? "Failed to generate pay link."}
+          />
         )}
 
-        {payLinkMutation.isError && (
-          <ErrorMessage message={payLinkMutation.error.message} />
-        )}
-
-        {payLinkMutation.isSuccess && (
-          <PayLinkBody invoice={invoice} payLink={payLinkMutation.data} />
+        {!isPending && !isError && payLink && (
+          <PayLinkBody invoice={invoice} payLink={payLink} />
         )}
       </div>
     </div>

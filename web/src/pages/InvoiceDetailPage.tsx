@@ -11,6 +11,7 @@ import {
   type FundingAccount,
   type Invoice,
   type InvoiceStatus,
+  type PayLinkResponse,
 } from "../api/client";
 import { NavBar } from "../components/NavBar";
 import { PageHeader } from "../components/PageHeader";
@@ -381,6 +382,26 @@ function CardSection({ invoice }: CardSectionProps) {
   const [sendOpen, setSendOpen] = useState(false);
   const sendable = canSendToVendor(invoice.status);
 
+  // The pay-link mutation lives here -- on the parent -- so that the user's
+  // click event triggers it directly. The previous implementation fired it
+  // from a useEffect inside the modal; React 19 StrictMode would unmount the
+  // mutation observer before the response arrived, leaving the modal stuck
+  // in "Generating..." even after the server returned 200.
+  const payLinkMutation = useMutation<PayLinkResponse, Error>({
+    mutationFn: () => api.invoices.payLink(invoice.id),
+  });
+
+  function handleSend() {
+    payLinkMutation.reset();
+    payLinkMutation.mutate();
+    setSendOpen(true);
+  }
+
+  function handleClose() {
+    setSendOpen(false);
+    payLinkMutation.reset();
+  }
+
   if (!invoice.cardId) {
     return (
       <ErrorMessage message="This invoice has no issued card yet — try refreshing in a moment." />
@@ -393,7 +414,7 @@ function CardSection({ invoice }: CardSectionProps) {
       <div className="flex justify-end">
         <button
           type="button"
-          onClick={() => setSendOpen(true)}
+          onClick={handleSend}
           disabled={!sendable}
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
           title={
@@ -409,7 +430,11 @@ function CardSection({ invoice }: CardSectionProps) {
       {sendOpen && (
         <SendToVendorModal
           invoice={invoice}
-          onClose={() => setSendOpen(false)}
+          isPending={payLinkMutation.isPending}
+          isError={payLinkMutation.isError}
+          errorMessage={payLinkMutation.error?.message}
+          payLink={payLinkMutation.data ?? null}
+          onClose={handleClose}
         />
       )}
     </>

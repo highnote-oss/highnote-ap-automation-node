@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { LoadingSpinner } from "./LoadingSpinner";
@@ -59,51 +59,69 @@ export function CardViewer({
   const [status, setStatus] = useState<ViewerStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [masked, setMasked] = useState(true);
-  const unmountRef = useRef<(() => Promise<void>) | null>(null);
   const toggleMaskRef = useRef<(() => void) | null>(null);
-
-  const mount = useCallback(async (clientTokenValue: string): Promise<void> => {
-    setStatus("loading");
-    setError(null);
-    try {
-      const { renderFields } = await import("@highnoteplatform/card-viewer");
-      // Yield a paint frame so React commits the container divs before the
-      // SDK queries for them via `selector`.
-      await new Promise((r) => setTimeout(r, 0));
-      const { unmount, toggleCardNumberMask } = await renderFields({
-        clientToken: clientTokenValue,
-        paymentCardId,
-        environment: "test",
-        onError: (err: CardViewerError) => {
-          setError(err?.message ?? "Failed to load card details");
-          setStatus("error");
-        },
-        elements: {
-          cardNumber: { selector: "#ap-viewer-card-number" },
-          cvv: { selector: "#ap-viewer-cvv" },
-          expirationDate: { selector: "#ap-viewer-expiry" },
-        },
-      });
-      unmountRef.current = unmount;
-      toggleMaskRef.current = toggleCardNumberMask;
-      setStatus("ready");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load card viewer");
-      setStatus("error");
-    }
-  }, [paymentCardId]);
 
   useEffect(() => {
     if (!resolvedTokenValue) return;
-    void mount(resolvedTokenValue);
+
+    // Track whether this effect run is still relevant. StrictMode in dev runs
+    // mount → cleanup → re-mount; we need to know in the cleanup whether the
+    // async `renderFields` from this run has resolved yet, and in the async
+    // path whether the effect has already been torn down.
+    let cancelled = false;
+    let pendingUnmount: (() => Promise<void>) | null = null;
+
+    (async () => {
+      setStatus("loading");
+      setError(null);
+      try {
+        const { renderFields } = await import("@highnoteplatform/card-viewer");
+        if (cancelled) return;
+        // Yield a paint frame so React commits the container divs before the
+        // SDK queries for them via `selector`.
+        await new Promise((r) => setTimeout(r, 0));
+        if (cancelled) return;
+        const { unmount, toggleCardNumberMask } = await renderFields({
+          clientToken: resolvedTokenValue,
+          paymentCardId,
+          environment: "test",
+          onError: (err: CardViewerError) => {
+            if (cancelled) return;
+            setError(err?.message ?? "Failed to load card details");
+            setStatus("error");
+          },
+          elements: {
+            cardNumber: { selector: "#ap-viewer-card-number" },
+            cvv: { selector: "#ap-viewer-cvv" },
+            expirationDate: { selector: "#ap-viewer-expiry" },
+          },
+        });
+        // Effect was torn down (e.g. StrictMode cleanup) while renderFields was
+        // in flight. Unmount immediately so we don't leak an orphan iframe and
+        // don't update state on a torn-down component.
+        if (cancelled) {
+          void unmount();
+          return;
+        }
+        pendingUnmount = unmount;
+        toggleMaskRef.current = toggleCardNumberMask;
+        setStatus("ready");
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Failed to load card viewer");
+        setStatus("error");
+      }
+    })();
+
     return () => {
+      cancelled = true;
       toggleMaskRef.current = null;
-      if (unmountRef.current) {
-        void unmountRef.current();
-        unmountRef.current = null;
+      if (pendingUnmount) {
+        void pendingUnmount();
+        pendingUnmount = null;
       }
     };
-  }, [mount, resolvedTokenValue]);
+  }, [paymentCardId, resolvedTokenValue]);
 
   function handleToggleMask() {
     toggleMaskRef.current?.();

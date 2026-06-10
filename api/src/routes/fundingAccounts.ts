@@ -5,11 +5,23 @@ import {
   HighnoteUserError,
   HighnoteAccessDeniedError,
   ElectronicFundTransferSource,
-  FinancialAccountFeatureType,
   Iso4217Alpha3SupportedCurrency,
 } from "@highnote-oss/nodejs-sdk";
-import { highnote, cardProductId, getSubscriberAccountHolderId } from "../services/highnote.js";
+import { highnote, cardProductId } from "../services/highnote.js";
 import { IdParamsSchema } from "../types.js";
+
+/**
+ * Names of features that mark an account as a *source* of funds for ODF-issued
+ * cards. Each card product's PFA carries `ProductFundingFinancialAccountFeature`;
+ * the demo lists these so the operator can pick one as `sourceFinancialAccountId`
+ * when approving an invoice.
+ *
+ * NOTE: keep these as `__typename` strings; the SDK exposes the discriminator
+ * via `feature.__typename`, not via a separate enum.
+ */
+const FUNDING_SOURCE_FEATURE_TYPENAMES = new Set([
+  "ProductFundingFinancialAccountFeature",
+]);
 
 const TopUpBodySchema = z.object({
   amountCents: z.number().int().positive(),
@@ -24,20 +36,24 @@ export async function fundingAccountRoutes(app: FastifyInstance) {
   typedApp.get("/api/funding-accounts", {
     schema: {
       tags: ["Funding Accounts"],
-      description: "List funding accounts available for issuing virtual cards from the AP card product.",
+      description:
+        "List Product Funding Accounts (PFAs) for the configured AP card product. Each PFA is a candidate `sourceFinancialAccountId` for ODF-backed card issuance.",
     },
   }, async (_request, reply) => {
     try {
-      const accountHolderId = await getSubscriberAccountHolderId();
-      const accounts = [];
-      for await (const fa of highnote.accountHolders.listFinancialAccounts(accountHolderId, {
-        filterBy: {
-          features: { includes: [FinancialAccountFeatureType.CARD_FUNDING_ACCOUNT] },
-          cardProductId: { equals: cardProductId },
-        },
-      })) {
-        accounts.push(fa);
+      // PFAs live at the card-product / org level, not at the applicant's
+      // account holder. Querying accountHolders.listFinancialAccounts with
+      // the subscriber's accountHolderId returns nothing here -- the PFA
+      // belongs to the issuer organization, not to the subscriber.
+      const all = [];
+      for await (const fa of highnote.cardProducts.listFinancialAccounts(cardProductId)) {
+        all.push(fa);
       }
+      const accounts = all.filter((fa) =>
+        (fa.features ?? []).some(
+          (f) => f.__typename && FUNDING_SOURCE_FEATURE_TYPENAMES.has(f.__typename),
+        ),
+      );
       return { accounts };
     } catch (err) {
       return handleError(err, reply);

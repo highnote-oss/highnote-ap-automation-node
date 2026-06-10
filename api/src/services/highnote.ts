@@ -19,11 +19,16 @@ let cachedAccountHolderId: string | null = null;
 
 /**
  * Look up the application once at first need and cache the underlying
- * account holder ID. The AP automation demo uses a single subscriber
- * identity for the lifetime of the process; this ID drives all
- * accountHolders.listFinancialAccounts queries.
+ * account holder ID. The demo supports both paths:
+ *   - subscriber product offering applications (snapshot is
+ *     BusinessProductApplicantSnapshot)
+ *   - business or person account holder applications (snapshot is
+ *     USBusinessAccountHolderSnapshot or USPersonAccountHolderSnapshot)
+ *
+ * The SDK's findApplication fragment selects `accountHolderCurrent.id` on
+ * all three variants, so the same code path covers each.
  */
-export async function getSubscriberAccountHolderId(): Promise<string> {
+export async function getAccountHolderId(): Promise<string> {
   if (cachedAccountHolderId) return cachedAccountHolderId;
 
   const app = await highnote.applications.get(applicationId);
@@ -34,13 +39,11 @@ export async function getSubscriberAccountHolderId(): Promise<string> {
     );
   }
 
-  const id =
-    (snapshot as { accountHolderCurrent?: { id?: string } }).accountHolderCurrent?.id ??
-    (snapshot as { id?: string }).id;
+  const id = (snapshot as { accountHolderCurrent?: { id?: string } }).accountHolderCurrent?.id;
 
   if (!id) {
     throw new Error(
-      `Could not extract account holder ID from snapshot of ${applicationId} (typename=${snapshot.__typename}).`,
+      `Could not extract account holder ID from snapshot of ${applicationId} (typename=${snapshot.__typename}). The application may not be APPROVED yet.`,
     );
   }
 

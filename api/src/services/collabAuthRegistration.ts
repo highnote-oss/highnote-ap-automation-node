@@ -98,11 +98,14 @@ function mapEndpointStatus(input: string | undefined): RegistrationStatus {
   }
 }
 
-async function cleanupStaleEndpoints(currentName: string): Promise<number> {
+// Remove every prior bay19-auto-* endpoint before registering a fresh one.
+// Runs before addEndpoint, so the new endpoint does not exist yet — we must NOT
+// skip same-named endpoints (re-deploying the same commit reuses the name), or
+// stale ACTIVATION_FAILED endpoints accumulate and hit the 5-endpoint limit.
+async function cleanupStaleEndpoints(): Promise<number> {
   let removed = 0;
   for await (const ep of highnote.collaborativeAuth.list()) {
     if (!ep.name?.startsWith(ENDPOINT_NAME_PREFIX)) continue;
-    if (ep.name === currentName) continue;
     try {
       await highnote.collaborativeAuth.removeEndpoint({ endpointId: ep.id });
       removed += 1;
@@ -134,7 +137,7 @@ async function doRegister(): Promise<void> {
 
   try {
     try {
-      const removed = await cleanupStaleEndpoints(name);
+      const removed = await cleanupStaleEndpoints();
       if (removed > 0) {
         console.log(
           `[collab-auth] Removed ${removed} stale ${ENDPOINT_NAME_PREFIX}* endpoint(s) before registering.`,

@@ -66,18 +66,19 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
       }
 
       // `verifyCollaborativeAuthSignature` returns the entire parsed payload as
-      // `request`; a real authorization carries `data.collaborativeAuthorizationRequest`.
+      // `request`. A real authorization carries a
+      // `data.collaborativeAuthorizationRequest` with a `paymentCard`.
       const caRequest =
         verification.request?.data?.collaborativeAuthorizationRequest;
 
       // Activation handshake. Highnote verifies a newly-registered endpoint by
-      // POSTing a signed NOTIFICATION_ACTIVATION ping that has no CA request.
-      // Acknowledge it with 200 so the endpoint transitions to ACTIVE. The old
-      // code dereferenced the missing request and threw a 500, which left the
-      // endpoint stuck in ACTIVATION_FAILED. (The webhook receiver already 200s
-      // the equivalent ping on its target.)
-      if (!caRequest) {
-        request.log.info("CA endpoint verification ping acknowledged");
+      // POSTing a signed request whose `collaborativeAuthorizationRequest` is a
+      // `CollaborativeAuthorizationEndpointActivationRequest` ({ ping: "pong" })
+      // — present, but with NO `paymentCard`. Acknowledge it with any 2XX so the
+      // endpoint transitions to ACTIVE. Dereferencing the absent paymentCard is
+      // what threw a 500 here and left the endpoint stuck in ACTIVATION_FAILED.
+      if (!caRequest || !caRequest.paymentCard) {
+        request.log.info("CA endpoint activation ping acknowledged");
         return reply.status(200).send({ received: true });
       }
       const cardId = caRequest.paymentCard.id;

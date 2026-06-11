@@ -347,22 +347,16 @@ describe("POST /collaborative-auth — signature & registration", () => {
     expect(res.statusCode).toBe(503);
   });
 
-  it("acknowledges a signed activation ping (no CA request) with 200", async () => {
-    // Highnote verifies a newly-registered endpoint by POSTing a signed
-    // NOTIFICATION_ACTIVATION ping that carries no
-    // collaborativeAuthorizationRequest. The signature is valid but there is
-    // no CA request to decide on, so the endpoint must still answer 200 or it
-    // is left ACTIVATION_FAILED.
+  it("acknowledges a signed activation ping with 200", async () => {
+    // The exact verification request Highnote POSTs to activate an endpoint: a
+    // signed CollaborativeAuthorizationEndpointActivationRequest ({ ping: "pong" })
+    // — it has a collaborativeAuthorizationRequest but NO paymentCard. The
+    // endpoint must answer 2XX or it is left ACTIVATION_FAILED.
     const body = {
       data: {
-        node: {
-          __typename: "NotificationEvent",
-          id: "nee_" + randomUUID(),
-          name: "NOTIFICATION_ACTIVATION",
-          node: {
-            __typename: "NotificationTargetActivationEvent",
-            ping: "pong",
-          },
+        collaborativeAuthorizationRequest: {
+          __typename: "CollaborativeAuthorizationEndpointActivationRequest",
+          ping: "pong",
         },
       },
       extensions: { signatureTimestamp: Date.now() },

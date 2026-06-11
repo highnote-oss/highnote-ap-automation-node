@@ -121,7 +121,8 @@ automatically. Each deploy:
 2. Removes any prior `bay19-auto-*` targets and endpoints so the Highnote
    dashboard stays clean.
 3. Calls Highnote to register a fresh notification target at
-   `<url>/api/webhooks` (subscribed to `CARD_PAYMENT_*` events) and a fresh
+   `<url>/api/webhooks` (subscribed to all `NotificationEvent` types; the
+   receiver dispatches only on the `PAYMENT_CARD_*` events) and a fresh
    collaborative-authorization endpoint at `<url>/collaborative-auth`.
 4. Holds the returned HMAC signing keys **in process memory only** — never
    logged, never persisted, never exposed via the API. Both keys rotate every
@@ -218,7 +219,7 @@ Render Web Service (single container, /app/data on persistent disk)
   │     │     ├── reads RENDER_EXTERNAL_URL (auto-injected)
   │     │     ├── highnote.webhooks.list()      ─── removes prior bay19-auto-* targets
   │     │     └── highnote.webhooks.add()       ─── registers fresh target
-  │     │           ├── subscribes to CARD_PAYMENT_* events
+  │     │           ├── subscribes to all NotificationEvent types
   │     │           └── signing key held in-process (never logged or persisted)
   │     │
   │     └── collabAuthRegistration.init()

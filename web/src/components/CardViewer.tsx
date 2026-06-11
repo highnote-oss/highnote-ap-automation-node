@@ -59,7 +59,23 @@ export function CardViewer({
   const [status, setStatus] = useState<ViewerStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [masked, setMasked] = useState(true);
+  const [mountKey, setMountKey] = useState(0);
   const toggleMaskRef = useRef<(() => void) | null>(null);
+
+  // The SDK has an internal race: the cardNumber iframe broadcasts
+  // PAYMENT_CARD_DATA_READY to siblings via postMessage immediately after its
+  // GraphQL fetch. Sibling iframes need to have already executed renderField()
+  // and attached their message listener by the time the broadcast arrives.
+  // Browsers do not queue postMessage events for windows that aren't listening
+  // yet, so a cached/fast-network response can fire the broadcast before
+  // siblings settle and the cvv / expiry values never paint.
+  //
+  // We detect this by listening for CARD_VIEWER_READY via the onReady callback
+  // and retrying the mount if it doesn't fire within READY_TIMEOUT_MS. Each
+  // retry bumps `mountKey` which restarts the effect.
+  const READY_TIMEOUT_MS = 3000;
+  const MAX_RETRIES = 3;
+  const retryCountRef = useRef(0);
 
   useEffect(() => {
     if (!resolvedTokenValue) return;
@@ -70,6 +86,8 @@ export function CardViewer({
     // path whether the effect has already been torn down.
     let cancelled = false;
     let pendingUnmount: (() => Promise<void>) | null = null;
+    let readyTimeout: ReturnType<typeof setTimeout> | null = null;
+    let ready = false;
 
     (async () => {
       setStatus("loading");
@@ -90,6 +108,16 @@ export function CardViewer({
             setError(err?.message ?? "Failed to load card details");
             setStatus("error");
           },
+          onReady: () => {
+            ready = true;
+            if (readyTimeout) {
+              clearTimeout(readyTimeout);
+              readyTimeout = null;
+            }
+            // Reset retry counter on success so a later remount (e.g. after
+            // a stale-card refresh) gets a fresh budget.
+            retryCountRef.current = 0;
+          },
           elements: {
             cardNumber: { selector: "#ap-viewer-card-number" },
             cvv: { selector: "#ap-viewer-cvv" },
@@ -106,6 +134,25 @@ export function CardViewer({
         pendingUnmount = unmount;
         toggleMaskRef.current = toggleCardNumberMask;
         setStatus("ready");
+
+        // Watchdog: if onReady didn't fire by now, the postMessage race lost.
+        // Unmount and bump mountKey to trigger a fresh attempt.
+        readyTimeout = setTimeout(() => {
+          if (ready || cancelled) return;
+          if (retryCountRef.current >= MAX_RETRIES) {
+            setError(
+              "Card viewer did not finish loading after several attempts. Refresh the page to retry.",
+            );
+            setStatus("error");
+            return;
+          }
+          retryCountRef.current += 1;
+          if (pendingUnmount) {
+            void pendingUnmount();
+            pendingUnmount = null;
+          }
+          setMountKey((k) => k + 1);
+        }, READY_TIMEOUT_MS);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : "Failed to load card viewer");
@@ -116,12 +163,16 @@ export function CardViewer({
     return () => {
       cancelled = true;
       toggleMaskRef.current = null;
+      if (readyTimeout) {
+        clearTimeout(readyTimeout);
+        readyTimeout = null;
+      }
       if (pendingUnmount) {
         void pendingUnmount();
         pendingUnmount = null;
       }
     };
-  }, [paymentCardId, resolvedTokenValue]);
+  }, [paymentCardId, resolvedTokenValue, mountKey]);
 
   function handleToggleMask() {
     toggleMaskRef.current?.();

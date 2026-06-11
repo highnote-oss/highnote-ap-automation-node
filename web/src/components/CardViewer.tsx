@@ -325,11 +325,11 @@ export function CardViewer({
         - The SDK's per-field `styles` prop only allows typographic props
           (fontSize, lineHeight, color, …) — not height/padding — so it
           can't shrink the box. The only lever is the iframe element's
-          height, which we override from the outside to h-8 (32px).
-        - The value is top-aligned in the iframe (~10px offset). 32px hugs it
-          into a normal field-height box; the value stays fully visible with
-          a safety margin (clips below ~26px — verified against SDK 1.4.2).
-          Width is overridden to 100% so each field fills its column.
+          height, which we override from the outside to h-7 (28px), paired
+          with tight py-1 wrapper padding for a compact field.
+        - The value is top-aligned in the iframe (~10px offset). 28px is about
+          as short as it goes before the value clips (verified against SDK
+          1.4.2). Width is overridden to 100% so each field fills its column.
       */}
       <div className={fieldsVisible ? "max-w-xs" : "hidden"}>
         <div className="space-y-3">
@@ -337,7 +337,7 @@ export function CardViewer({
             <label className="text-xs font-medium text-gray-500">Card number</label>
             <div
               id="ap-viewer-card-number"
-              className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!h-8 [&_iframe]:!w-full"
+              className="mt-1 rounded-md border border-gray-200 px-2 py-1 [&_iframe]:!h-7 [&_iframe]:!w-full"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -345,14 +345,14 @@ export function CardViewer({
               <label className="text-xs font-medium text-gray-500">Expiry</label>
               <div
                 id="ap-viewer-expiry"
-                className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!h-8 [&_iframe]:!w-full"
+                className="mt-1 rounded-md border border-gray-200 px-2 py-1 [&_iframe]:!h-7 [&_iframe]:!w-full"
               />
             </div>
             <div>
               <label className="text-xs font-medium text-gray-500">CVV</label>
               <div
                 id="ap-viewer-cvv"
-                className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!h-8 [&_iframe]:!w-full"
+                className="mt-1 rounded-md border border-gray-200 px-2 py-1 [&_iframe]:!h-7 [&_iframe]:!w-full"
               />
             </div>
           </div>

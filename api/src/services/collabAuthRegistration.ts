@@ -193,13 +193,42 @@ async function doRegister(): Promise<void> {
   }
 }
 
+const ACTIVATION_RETRY_ATTEMPTS = 5;
+const ACTIVATION_RETRY_MS = 2500;
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Register, retrying until the endpoint reports ACTIVE. Activation makes
+ * Highnote POST a verification request to /collaborative-auth; on a fresh
+ * deploy the server is listening but Render's edge may not route to the new
+ * instance for a second or two, so the first attempt can land ACTIVATION_FAILED.
+ * Each retry re-runs the full registration (cleanup removes the prior endpoint,
+ * so they don't pile up) — the same path the manual Re-register button takes,
+ * which is known to succeed once the instance is reachable. Stops early once
+ * ACTIVE, or immediately when there's nothing to register (local, no public URL).
+ */
+async function doRegisterWithRetry(): Promise<void> {
+  for (let attempt = 1; attempt <= ACTIVATION_RETRY_ATTEMPTS; attempt++) {
+    await doRegister();
+    if (state.status === "ACTIVE" || state.status === "NOT_REGISTERED") return;
+    if (attempt < ACTIVATION_RETRY_ATTEMPTS) {
+      console.warn(
+        `[collab-auth] status=${state.status} after attempt ${attempt}/${ACTIVATION_RETRY_ATTEMPTS}; retrying in ${ACTIVATION_RETRY_MS}ms`,
+      );
+      await delay(ACTIVATION_RETRY_MS);
+    }
+  }
+}
+
 /**
  * Idempotent, single-flight registration. Concurrent callers await the same
  * promise. Errors are caught and recorded in state — does not throw.
  */
 export function init(): Promise<void> {
   if (inFlight) return inFlight;
-  inFlight = doRegister().finally(() => {
+  inFlight = doRegisterWithRetry().finally(() => {
     inFlight = null;
   });
   return inFlight;
@@ -218,7 +247,7 @@ export function getPublicEndpointUrl(): string | null {
   return resolvePublicUrl().url;
 }
 
-/** Public-safe view of registration state. Never includes the signing key. */
+/** Public-safe view of cached registration state. Never includes the signing key. */
 export function getPublicStatus(): PublicStatus {
   return {
     endpointId: state.endpointId,
@@ -230,4 +259,29 @@ export function getPublicStatus(): PublicStatus {
     source: state.source,
     publicUrl: state.publicUrl,
   };
+}
+
+/**
+ * Public status with a best-effort live refresh from Highnote, so the UI shows
+ * the true current state (ACTIVE / PENDING_VERIFICATION / ACTIVATION_FAILED /
+ * DEACTIVATED) rather than the value cached at registration time. The CA SDK
+ * has no get-by-id, so we scan `list()` for our endpoint. On any lookup failure
+ * we fall back to the cached state.
+ */
+export async function getStatus(): Promise<PublicStatus> {
+  if (state.endpointId) {
+    try {
+      for await (const ep of highnote.collaborativeAuth.list()) {
+        if (ep.id === state.endpointId) {
+          state.status = mapEndpointStatus(ep.status);
+          if (ep.name) state.name = ep.name;
+          break;
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[collab-auth] Live status refresh failed: ${message}`);
+    }
+  }
+  return getPublicStatus();
 }

@@ -29,7 +29,8 @@ const CollabAuthDecisionsQuerySchema = z.object({
  *   3. Invoice cancelled → INVALID_TRANSACTION
  *   4. requestedAmount > invoice amount → INSUFFICIENT_FUNDS
  *   5. Invoice has expectedMcc AND merchant MCC mismatches → INVALID_MERCHANT_CATEGORY_CODE
- *   6. Otherwise → APPROVED
+ *   6. Odd-cent amount → DECLINED  (demo rule: even cents approve, odd decline)
+ *   7. Otherwise (even-cent amount) → APPROVED
  *
  * The decision row is persisted fire-and-forget so the response doesn't
  * block on the write — every millisecond counts under the 2s budget.
@@ -128,9 +129,20 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
             reason: `MCC mismatch (expected ${invoice.expectedMcc}, got ${merchantCategoryCode})`,
           };
         }
+        // Demo decision rule: approve even-cent amounts, decline odd-cent
+        // amounts. The amount is in cents, so `value % 2` tests the trailing
+        // cent digit ($10.04 -> approve, $10.05 -> decline). This is a
+        // deterministic hook for exercising the approve/decline paths in the
+        // Test environment — change the amount's last cent to flip the outcome.
+        if (requestedAmount.value % 2 !== 0) {
+          return {
+            code: CollaborativeAuthorizationResponseCode.DECLINED,
+            reason: "odd-cent amount (demo rule: even cents approve, odd decline)",
+          };
+        }
         return {
           code: CollaborativeAuthorizationResponseCode.APPROVED,
-          reason: "approved",
+          reason: "even-cent amount (demo rule: even cents approve, odd decline)",
         };
       };
 
@@ -218,7 +230,8 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
       },
     },
     async () => {
-      return collabAuthRegistration.getPublicStatus();
+      // Live-refresh from Highnote so the badge reflects the true status.
+      return collabAuthRegistration.getStatus();
     },
   );
 

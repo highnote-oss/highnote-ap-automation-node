@@ -370,10 +370,10 @@ function ExplainerCard() {
       <p>
         This simulates paying the invoice: a single-step authorization + clear
         against the card already issued for it. The collaborative-auth endpoint
-        decides the authorization synchronously — change the amount or MCC to
-        exercise each branch of the decision tree — then it clears, settling the
-        invoice (CARD_ISSUED → CLEARED). Both the CA decision and the webhook
-        event appear in the invoice's activity feed.
+        decides the authorization synchronously — even-cent amounts approve and
+        odd-cent amounts decline (e.g. $10.04 approves, $10.05 declines) — then
+        it clears, settling the invoice (CARD_ISSUED → CLEARED). Both the CA
+        decision and the webhook event appear in the invoice's activity feed.
       </p>
     </section>
   );

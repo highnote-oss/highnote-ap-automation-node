@@ -40,8 +40,6 @@ Highnote sends an HMAC-signed CA request to `POST /collaborative-auth` for
 every authorization attempt on a card issued through the AP product. The
 demo's decision tree returns:
 
-- `APPROVED` — the invoice exists, is unconsumed, and the requested amount
-  and merchant MCC match the expected values.
 - `INVALID_TRANSACTION` — no matching invoice for this card, or the invoice
   has been cancelled.
 - `DUPLICATE_TRANSACTION` — the invoice was already consumed by a prior
@@ -49,19 +47,35 @@ demo's decision tree returns:
 - `INSUFFICIENT_FUNDS` — requested amount exceeds the invoice amount.
 - `INVALID_MERCHANT_CATEGORY_CODE` — the invoice declared an
   `expectedMcc` and the merchant's MCC doesn't match.
+- `DECLINED` — the transaction is otherwise valid but the amount ends in an
+  **odd** number of cents.
+- `APPROVED` — the invoice exists, is unconsumed, the amount is within the
+  invoice and matches any `expectedMcc`, and it ends in an **even** number of
+  cents.
+
+> **Demo decision rule:** once a transaction passes the validity checks above,
+> the amount's trailing cent decides the outcome — **even cents approve, odd
+> cents decline** (`$10.04` approves, `$10.05` declines). It's a deterministic
+> switch for exercising both the approve and decline paths in the Test
+> environment; flip the last cent to flip the decision.
 
 Highnote enforces a strict ~2-second response budget. The decision logic is
 in-process, synchronous, and exercised by [`collaborativeAuth.test.ts`](./api/src/routes/collaborativeAuth.test.ts).
 
 ### 3. Webhook-driven reconciliation
 
-The notification target subscribes to `CARD_PAYMENT_*` events. On receipt:
+Highnote delivers a `NotificationEvent` nested under `data.node`; the receiver
+reads `data.node.name` (the event type) and `data.node.node` (the detail), then
+dispatches on:
 
-- `CARD_PAYMENT_AUTHORIZED_EVENT` → invoice `CARD_ISSUED` → `AUTHORIZED`.
-- `CARD_PAYMENT_CLEARED_EVENT` → invoice `AUTHORIZED` → `CLEARED`, or
-  `RECONCILED` if the cleared amount matches the invoice amount exactly. In
-  either terminal state the backend calls `cards.close()` to revoke the
-  single-use card.
+- `PAYMENT_CARD_AUTHORIZATION_APPROVED` → invoice `CARD_ISSUED` → `AUTHORIZED`.
+- `PAYMENT_CARD_AUTHORIZATION_AND_CLEAR_APPROVED` → single-step settle: invoice
+  → `CLEARED` (or `RECONCILED` on an exact-amount match). This is the path the
+  `/simulate` "pay invoice" (auth + clear) flow takes.
+- `PAYMENT_CARD_CLEARED` → invoice `AUTHORIZED` → `CLEARED` / `RECONCILED`.
+
+On any terminal settle the backend calls `cards.close()` to revoke the
+single-use card.
 
 All events are persisted to a local `webhook_events` table (deduped by event
 ID) and rendered live in the operator UI.

@@ -124,26 +124,33 @@ interface BuildEventOpts {
   eventId?: string;
 }
 
+// Mirrors the real Highnote delivery shape: a NotificationEvent nested under
+// data.node, whose type is data.node.name and whose per-event detail (cardId,
+// amounts) is data.node.node.
 function buildEventPayload(opts: BuildEventOpts = {}): Record<string, unknown> {
   const currencyCode =
     opts.approvedCurrency ?? Iso4217Alpha3SupportedCurrency.USD;
+  const name =
+    opts.eventName ?? NotificationEventName.PAYMENT_CARD_AUTHORIZATION_APPROVED;
   return {
-    id: opts.eventId ?? "evt_" + randomUUID(),
-    name: opts.eventName ?? NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT,
     data: {
-      __typename:
-        opts.eventName === NotificationEventName.CARD_PAYMENT_CLEARED_EVENT
-          ? "PaymentCardClearedEvent"
-          : "PaymentCardAuthorizationApprovedEvent",
-      id: "ev_node_" + randomUUID(),
-      cardId: opts.cardId ?? "pc_test",
-      approvedAmount: {
-        value: opts.approvedValue ?? 5_000,
-        currencyCode,
-      },
-      requestedAmount: {
-        value: opts.approvedValue ?? 5_000,
-        currencyCode,
+      node: {
+        __typename: "NotificationEvent",
+        id: opts.eventId ?? "nee_" + randomUUID(),
+        name,
+        node: {
+          __typename: "PaymentCardAuthorizationApprovedEvent",
+          id: "te_" + randomUUID(),
+          cardId: opts.cardId ?? "pc_test",
+          approvedAmount: {
+            value: opts.approvedValue ?? 5_000,
+            currencyCode,
+          },
+          requestedAmount: {
+            value: opts.approvedValue ?? 5_000,
+            currencyCode,
+          },
+        },
       },
     },
     extensions: { signatureTimestamp: Date.now() },
@@ -266,14 +273,14 @@ describe("POST /api/webhooks — signature & basic shape", () => {
 });
 
 describe("POST /api/webhooks — invoice state transitions", () => {
-  it("transitions CARD_ISSUED → AUTHORIZED on CARD_PAYMENT_AUTHORIZED_EVENT for a matching card", async () => {
+  it("transitions CARD_ISSUED → AUTHORIZED on PAYMENT_CARD_AUTHORIZATION_APPROVED for a matching card", async () => {
     const invoiceId = seedInvoice();
 
     const { statusCode } = await postSigned(
       app,
       buildEventPayload({
         cardId: "pc_test",
-        eventName: NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT,
+        eventName: NotificationEventName.PAYMENT_CARD_AUTHORIZATION_APPROVED,
       }),
     );
     expect(statusCode).toBe(200);
@@ -282,9 +289,9 @@ describe("POST /api/webhooks — invoice state transitions", () => {
     expect(row?.status).toBe("AUTHORIZED" satisfies InvoiceStatus);
   });
 
-  it("transitions to RECONCILED on CARD_PAYMENT_CLEARED_EVENT when amount matches exactly, and fires cards.close", async () => {
+  it("settles CARD_ISSUED → RECONCILED on a single-step auth+clear (AP pay path) and fires cards.close", async () => {
     const invoiceId = seedInvoice({
-      status: "AUTHORIZED" satisfies InvoiceStatus,
+      status: "CARD_ISSUED" satisfies InvoiceStatus,
       amountCents: 10_000,
       currencyCode: Iso4217Alpha3SupportedCurrency.USD,
     });
@@ -293,7 +300,8 @@ describe("POST /api/webhooks — invoice state transitions", () => {
       app,
       buildEventPayload({
         cardId: "pc_test",
-        eventName: NotificationEventName.CARD_PAYMENT_CLEARED_EVENT,
+        eventName:
+          NotificationEventName.PAYMENT_CARD_AUTHORIZATION_AND_CLEAR_APPROVED,
         approvedValue: 10_000,
         approvedCurrency: "USD",
       }),
@@ -305,7 +313,7 @@ describe("POST /api/webhooks — invoice state transitions", () => {
     expect(cardsClose).toHaveBeenCalledWith({ paymentCardId: "pc_test" });
   });
 
-  it("transitions to CLEARED (not RECONCILED) on CARD_PAYMENT_CLEARED_EVENT with amount variance, and still fires cards.close", async () => {
+  it("transitions to RECONCILED on PAYMENT_CARD_CLEARED when amount matches exactly, and fires cards.close", async () => {
     const invoiceId = seedInvoice({
       status: "AUTHORIZED" satisfies InvoiceStatus,
       amountCents: 10_000,
@@ -316,7 +324,30 @@ describe("POST /api/webhooks — invoice state transitions", () => {
       app,
       buildEventPayload({
         cardId: "pc_test",
-        eventName: NotificationEventName.CARD_PAYMENT_CLEARED_EVENT,
+        eventName: NotificationEventName.PAYMENT_CARD_CLEARED,
+        approvedValue: 10_000,
+        approvedCurrency: "USD",
+      }),
+    );
+    expect(statusCode).toBe(200);
+
+    const row = db.select().from(invoices).where(eq(invoices.id, invoiceId)).get();
+    expect(row?.status).toBe("RECONCILED" satisfies InvoiceStatus);
+    expect(cardsClose).toHaveBeenCalledWith({ paymentCardId: "pc_test" });
+  });
+
+  it("transitions to CLEARED (not RECONCILED) on PAYMENT_CARD_CLEARED with amount variance, and still fires cards.close", async () => {
+    const invoiceId = seedInvoice({
+      status: "AUTHORIZED" satisfies InvoiceStatus,
+      amountCents: 10_000,
+      currencyCode: Iso4217Alpha3SupportedCurrency.USD,
+    });
+
+    const { statusCode } = await postSigned(
+      app,
+      buildEventPayload({
+        cardId: "pc_test",
+        eventName: NotificationEventName.PAYMENT_CARD_CLEARED,
         approvedValue: 9_950, // Variance — does not match invoice exactly.
         approvedCurrency: "USD",
       }),
@@ -335,7 +366,7 @@ describe("POST /api/webhooks — invoice state transitions", () => {
       app,
       buildEventPayload({
         cardId: "pc_unknown",
-        eventName: NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT,
+        eventName: NotificationEventName.PAYMENT_CARD_AUTHORIZATION_APPROVED,
       }),
     );
     expect(statusCode).toBe(200);
@@ -346,7 +377,7 @@ describe("POST /api/webhooks — invoice state transitions", () => {
     const eventRows = db.select().from(webhookEvents).all();
     expect(eventRows).toHaveLength(1);
     expect(eventRows[0].eventType).toBe(
-      NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT,
+      NotificationEventName.PAYMENT_CARD_AUTHORIZATION_APPROVED,
     );
 
     expect(cardsClose).not.toHaveBeenCalled();
@@ -361,7 +392,7 @@ describe("POST /api/webhooks — invoice state transitions", () => {
       app,
       buildEventPayload({
         cardId: "pc_test",
-        eventName: NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT,
+        eventName: NotificationEventName.PAYMENT_CARD_AUTHORIZATION_APPROVED,
       }),
     );
     expect(statusCode).toBe(200);
@@ -383,9 +414,10 @@ describe("POST /api/webhooks — invoice state transitions", () => {
 
     const payload = buildEventPayload({
       cardId: "pc_test",
-      eventName: NotificationEventName.CARD_PAYMENT_CLEARED_EVENT,
+      eventName: NotificationEventName.PAYMENT_CARD_CLEARED,
       approvedValue: 10_000,
       approvedCurrency: "USD",
+      eventId: "nee_persist_test",
     });
 
     const { statusCode } = await postSigned(app, payload);
@@ -394,9 +426,10 @@ describe("POST /api/webhooks — invoice state transitions", () => {
     const eventRows = db.select().from(webhookEvents).all();
     expect(eventRows).toHaveLength(1);
     expect(eventRows[0].eventType).toBe(
-      NotificationEventName.CARD_PAYMENT_CLEARED_EVENT,
+      NotificationEventName.PAYMENT_CARD_CLEARED,
     );
-    expect(eventRows[0].eventId).toBe(payload.id);
+    // eventId is read from the nested data.node.id.
+    expect(eventRows[0].eventId).toBe("nee_persist_test");
 
     // Status write happens before the close attempt — so even though close
     // throws, the invoice has already advanced to its terminal status.
@@ -417,7 +450,7 @@ describe("POST /api/webhooks — invoice state transitions", () => {
       app,
       buildEventPayload({
         cardId: "pc_test",
-        eventName: NotificationEventName.CARD_PAYMENT_CLEARED_EVENT,
+        eventName: NotificationEventName.PAYMENT_CARD_CLEARED,
         approvedValue: 10_000,
         approvedCurrency: "USD",
       }),
@@ -432,7 +465,7 @@ describe("POST /api/webhooks — invoice state transitions", () => {
 
     const payload = {
       id: "evt_" + randomUUID(),
-      name: NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT,
+      name: NotificationEventName.PAYMENT_CARD_AUTHORIZATION_APPROVED,
       data: {
         __typename: "PaymentCardAuthorizationApprovedEvent",
         // cardId intentionally omitted.
@@ -463,7 +496,7 @@ describe("POST /api/webhooks — invoice state transitions", () => {
     const eventId = "evt_dup_" + randomUUID();
     const payload = buildEventPayload({
       cardId: "pc_test",
-      eventName: NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT,
+      eventName: NotificationEventName.PAYMENT_CARD_AUTHORIZATION_APPROVED,
       eventId,
     });
 
@@ -512,7 +545,7 @@ describe("GET /api/invoices/:id/webhook-events", () => {
     db.insert(webhookEvents)
       .values({
         eventId: "evt_old",
-        eventType: NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT,
+        eventType: NotificationEventName.PAYMENT_CARD_AUTHORIZATION_APPROVED,
         invoiceId,
         payload: "{}",
         receivedAt: "2024-01-01T00:00:00.000Z",
@@ -521,7 +554,7 @@ describe("GET /api/invoices/:id/webhook-events", () => {
     db.insert(webhookEvents)
       .values({
         eventId: "evt_new",
-        eventType: NotificationEventName.CARD_PAYMENT_CLEARED_EVENT,
+        eventType: NotificationEventName.PAYMENT_CARD_CLEARED,
         invoiceId,
         payload: "{}",
         receivedAt: "2024-02-01T00:00:00.000Z",
@@ -546,7 +579,7 @@ describe("GET /api/invoices/:id/webhook-events", () => {
     db.insert(webhookEvents)
       .values({
         eventId: "evt_leak",
-        eventType: NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT,
+        eventType: NotificationEventName.PAYMENT_CARD_AUTHORIZATION_APPROVED,
         invoiceId,
         payload: "{}",
       })

@@ -53,8 +53,8 @@ export function SimulatePage() {
       <NavBar />
       <main className="mx-auto max-w-3xl px-4 py-8">
         <PageHeader
-          title="Simulate authorization"
-          subtitle="Trigger a test-environment authorization against an issued card"
+          title="Simulate payment"
+          subtitle="Trigger a test-environment auth + clear against an issued card"
         />
         <SimulateForm />
         <ExplainerCard />
@@ -306,7 +306,7 @@ function SimulateForm() {
           disabled={simulate.isPending}
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
         >
-          {simulate.isPending ? "Simulating..." : "Simulate authorization"}
+          {simulate.isPending ? "Simulating..." : "Simulate payment (auth + clear)"}
         </button>
       </div>
     </form>
@@ -368,12 +368,12 @@ function ExplainerCard() {
   return (
     <section className="mt-6 rounded-xl border border-gray-200 bg-white/60 p-5 text-sm text-gray-600 shadow-sm">
       <p>
-        This simulates an inbound authorization against the card already issued
-        for the invoice. The collaborative-auth endpoint decides synchronously
-        — change the amount or MCC to exercise each branch of the decision
-        tree — and the resulting authorization fires a webhook back. Both the
-        CA decision and the webhook event will appear in the invoice's activity
-        feed.
+        This simulates paying the invoice: a single-step authorization + clear
+        against the card already issued for it. The collaborative-auth endpoint
+        decides the authorization synchronously — change the amount or MCC to
+        exercise each branch of the decision tree — then it clears, settling the
+        invoice (CARD_ISSUED → CLEARED). Both the CA decision and the webhook
+        event appear in the invoice's activity feed.
       </p>
     </section>
   );

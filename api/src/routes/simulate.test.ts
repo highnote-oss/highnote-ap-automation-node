@@ -7,14 +7,14 @@ import {
 import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 
-const { authorize } = vi.hoisted(() => ({
-  authorize: vi.fn(),
+const { authAndClear } = vi.hoisted(() => ({
+  authAndClear: vi.fn(),
 }));
 
 vi.mock("../services/highnote.js", () => ({
   highnote: {
     test: {
-      transactions: { authorize },
+      transactions: { authAndClear },
     },
   },
 }));
@@ -102,8 +102,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  authorize.mockReset();
-  authorize.mockResolvedValue(FIXTURE_EVENT);
+  authAndClear.mockReset();
+  authAndClear.mockResolvedValue(FIXTURE_EVENT);
   sqlite.exec("DELETE FROM invoices; DELETE FROM users;");
   const [a] = db
     .insert(users)
@@ -176,8 +176,8 @@ describe("POST /api/simulate/authorize", () => {
       payload: validBody({ invoiceId: id }),
     });
 
-    expect(authorize).toHaveBeenCalledTimes(1);
-    expect(authorize).toHaveBeenCalledWith({
+    expect(authAndClear).toHaveBeenCalledTimes(1);
+    expect(authAndClear).toHaveBeenCalledWith({
       cardId: "pc_specific_card",
       amount: {
         value: 5_000,
@@ -207,7 +207,7 @@ describe("POST /api/simulate/authorize", () => {
       payload: { ...validBody({ invoiceId: id }), currencyCode: "EUR" },
     });
 
-    expect(authorize.mock.calls[0][0].amount.currencyCode).toBe(
+    expect(authAndClear.mock.calls[0][0].amount.currencyCode).toBe(
       Iso4217Alpha3SupportedCurrency.USD,
     );
   });
@@ -224,7 +224,7 @@ describe("POST /api/simulate/authorize", () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/no issued card/i);
-    expect(authorize).not.toHaveBeenCalled();
+    expect(authAndClear).not.toHaveBeenCalled();
   });
 
   it("returns 400 when the invoice has no issued card", async () => {
@@ -242,7 +242,7 @@ describe("POST /api/simulate/authorize", () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toMatch(/no issued card/i);
-    expect(authorize).not.toHaveBeenCalled();
+    expect(authAndClear).not.toHaveBeenCalled();
   });
 
   it("returns 400 from Zod when category is not a valid MerchantCategory member", async () => {
@@ -256,7 +256,7 @@ describe("POST /api/simulate/authorize", () => {
     });
 
     expect(res.statusCode).toBe(400);
-    expect(authorize).not.toHaveBeenCalled();
+    expect(authAndClear).not.toHaveBeenCalled();
   });
 
   it("returns 400 from Zod when amountCents is not a positive integer", async () => {
@@ -270,7 +270,7 @@ describe("POST /api/simulate/authorize", () => {
     });
 
     expect(res.statusCode).toBe(400);
-    expect(authorize).not.toHaveBeenCalled();
+    expect(authAndClear).not.toHaveBeenCalled();
   });
 
   it("returns 400 from Zod when merchantName exceeds the SDK's 25-char cap", async () => {
@@ -284,11 +284,11 @@ describe("POST /api/simulate/authorize", () => {
     });
 
     expect(res.statusCode).toBe(400);
-    expect(authorize).not.toHaveBeenCalled();
+    expect(authAndClear).not.toHaveBeenCalled();
   });
 
   it("returns 400 with fieldErrors when the SDK throws HighnoteUserError", async () => {
-    authorize.mockRejectedValueOnce(
+    authAndClear.mockRejectedValueOnce(
       new HighnoteUserError([
         { code: "INVALID", description: "Card is closed" },
       ]),
@@ -311,7 +311,7 @@ describe("POST /api/simulate/authorize", () => {
   });
 
   it("returns 403 when the SDK throws HighnoteAccessDeniedError", async () => {
-    authorize.mockRejectedValueOnce(new HighnoteAccessDeniedError("nope"));
+    authAndClear.mockRejectedValueOnce(new HighnoteAccessDeniedError("nope"));
     const id = seedInvoice(userAId);
 
     const res = await app.inject({

@@ -33,15 +33,22 @@ if [[ -z "$REPO" ]]; then
   exit 2
 fi
 
-# The bypass user — edit if a different solo maintainer owns the new repo.
-# Extend bypass_pull_request_allowances.teams if you want team-level bypass.
-BYPASS_USER="${BYPASS_USER:-mtarng}"
+# The PR-bypass user (a solo maintainer allowed to push to main without a PR).
+# Defaults to whoever runs this script; override with BYPASS_USER=<login>, or
+# set BYPASS_USER= (empty) for strict protection with no bypass. Extend
+# bypass_pull_request_allowances.teams for team-level bypass.
+BYPASS_USER="${BYPASS_USER-$(gh api user --jq .login 2>/dev/null || true)}"
+if [[ -n "$BYPASS_USER" ]]; then
+  BYPASS_USERS_JSON="[\"$BYPASS_USER\"]"
+else
+  BYPASS_USERS_JSON="[]"
+fi
 
 # Required status check names — must EXACTLY match the job names from
 # .github/workflows/ci.yml. Em-dashes matter.
 REQUIRED_CHECKS='["API — typecheck, build & test", "Web — typecheck & build"]'
 
-echo "==> Bootstrap repo $REPO (bypass user: $BYPASS_USER)"
+echo "==> Bootstrap repo $REPO (bypass user: ${BYPASS_USER:-<none>})"
 
 # ----- branch protection on main --------------------------------------------
 
@@ -58,7 +65,7 @@ gh api -X PUT "repos/$REPO/branches/main/protection" --input - <<JSON --jq '{loc
     "require_code_owner_reviews": true,
     "required_approving_review_count": 1,
     "bypass_pull_request_allowances": {
-      "users": ["$BYPASS_USER"],
+      "users": $BYPASS_USERS_JSON,
       "teams": [],
       "apps": []
     }

@@ -170,7 +170,7 @@ export function CardViewer({
             <label className="text-xs font-medium text-gray-500">Card number</label>
             <div
               id="ap-viewer-card-number"
-              className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!h-[24px] [&_iframe]:!w-full"
+              className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!h-[36px] [&_iframe]:!w-full"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -178,14 +178,14 @@ export function CardViewer({
               <label className="text-xs font-medium text-gray-500">Expiry</label>
               <div
                 id="ap-viewer-expiry"
-                className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!h-[24px] [&_iframe]:!w-full"
+                className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!h-[36px] [&_iframe]:!w-full"
               />
             </div>
             <div>
               <label className="text-xs font-medium text-gray-500">CVV</label>
               <div
                 id="ap-viewer-cvv"
-                className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!h-[24px] [&_iframe]:!w-full"
+                className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!h-[36px] [&_iframe]:!w-full"
               />
             </div>
           </div>

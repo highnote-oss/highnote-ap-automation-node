@@ -22,6 +22,7 @@ import { fundingAccountRoutes } from "./routes/fundingAccounts.js";
 import { invoiceRoutes } from "./routes/invoices.js";
 import { clientTokenRoutes } from "./routes/clientTokens.js";
 import { collaborativeAuthRoutes } from "./routes/collaborativeAuth.js";
+import * as collabAuthRegistration from "./services/collabAuthRegistration.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { payByLinkRoutes } from "./routes/payByLink.js";
 import { simulateRoutes } from "./routes/simulate.js";
@@ -233,8 +234,12 @@ export async function buildApp(): Promise<FastifyInstance> {
     routePrefix: "/docs",
   });
 
-  // Health check
-  app.get("/health", async () => ({ status: "ok" }));
+  // Health check. `bootId` lets the CA registration detect when Render has cut
+  // external traffic over to this specific instance before it activates.
+  app.get("/health", async () => ({
+    status: "ok",
+    bootId: collabAuthRegistration.getBootId(),
+  }));
 
   // Environment config (public)
   app.get("/api/config", async () => ({ environment }));

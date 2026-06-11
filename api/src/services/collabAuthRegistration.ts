@@ -12,7 +12,20 @@
  * when no signing key is in memory, depending on caller policy).
  */
 
+import { randomUUID } from "node:crypto";
 import { highnote } from "./highnote.js";
+
+/**
+ * Unique per-process id, echoed by `GET /health`. Used to detect when Render
+ * has cut external traffic over to THIS instance during a deploy (see
+ * `waitForExternalCutover`).
+ */
+const BOOT_ID = randomUUID();
+
+/** This process's boot id — surfaced on `/health` for cutover detection. */
+export function getBootId(): string {
+  return BOOT_ID;
+}
 
 export type RegistrationStatus =
   | "NOT_REGISTERED"
@@ -193,23 +206,60 @@ async function doRegister(): Promise<void> {
   }
 }
 
-const ACTIVATION_RETRY_ATTEMPTS = 5;
-const ACTIVATION_RETRY_MS = 2500;
+const CUTOVER_POLL_ATTEMPTS = 30;
+const CUTOVER_POLL_MS = 5000; // up to ~2.5 min waiting for Render to cut over
+const ACTIVATION_RETRY_ATTEMPTS = 4;
+const ACTIVATION_RETRY_MS = 4000;
 
 const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Register, retrying until the endpoint reports ACTIVE. Activation makes
- * Highnote POST a verification request to /collaborative-auth; on a fresh
- * deploy the server is listening but Render's edge may not route to the new
- * instance for a second or two, so the first attempt can land ACTIVATION_FAILED.
- * Each retry re-runs the full registration (cleanup removes the prior endpoint,
- * so they don't pile up) — the same path the manual Re-register button takes,
- * which is known to succeed once the instance is reachable. Stops early once
- * ACTIVE, or immediately when there's nothing to register (local, no public URL).
+ * Block until Render has cut external traffic over to THIS instance. During a
+ * deploy the public URL keeps routing to the OLD instance — which holds a
+ * different signing key — until the new one passes its health check, so any
+ * activation before cutover fails (Highnote's verification ping reaches the old
+ * instance and gets a 401). We poll our own public `/health` and wait until it
+ * echoes this process's boot id. Best-effort: on timeout we proceed anyway.
+ */
+async function waitForExternalCutover(baseUrl: string): Promise<void> {
+  for (let i = 0; i < CUTOVER_POLL_ATTEMPTS; i++) {
+    try {
+      const res = await fetch(`${baseUrl}/health`);
+      if (res.ok) {
+        const body = (await res.json()) as { bootId?: string };
+        if (body.bootId === BOOT_ID) {
+          console.log(
+            `[collab-auth] External cutover confirmed after ~${(i * CUTOVER_POLL_MS) / 1000}s.`,
+          );
+          return;
+        }
+      }
+    } catch {
+      // Public URL not reachable from here yet; keep waiting.
+    }
+    await delay(CUTOVER_POLL_MS);
+  }
+  console.warn(
+    "[collab-auth] External cutover not confirmed within window; registering anyway.",
+  );
+}
+
+/**
+ * Register, retrying until the endpoint reports ACTIVE. We first wait for Render
+ * to route external traffic to this instance (so the activation verification
+ * ping actually reaches us), then run the full registration — the same path the
+ * manual Re-register button takes. A few retries cover any residual flakiness.
+ * Each attempt's cleanup removes the prior endpoint so they don't pile up.
+ * Returns immediately when there's nothing to register (local, no public URL).
  */
 async function doRegisterWithRetry(): Promise<void> {
+  const { url } = resolvePublicUrl();
+  if (!url) {
+    await doRegister();
+    return;
+  }
+  await waitForExternalCutover(url.replace(/\/collaborative-auth$/, ""));
   for (let attempt = 1; attempt <= ACTIVATION_RETRY_ATTEMPTS; attempt++) {
     await doRegister();
     if (state.status === "ACTIVE" || state.status === "NOT_REGISTERED") return;

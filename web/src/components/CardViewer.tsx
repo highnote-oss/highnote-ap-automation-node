@@ -164,13 +164,29 @@ export function CardViewer({
       {status === "loading" && <LoadingSpinner message="Decrypting card..." />}
       {status === "error" && error && <ErrorMessage message={error} />}
 
+      {/*
+        Iframe sizing notes:
+        - The SDK injects iframes with `width: 300px; height: 150px` defaults
+          and positions the value somewhere in that area (likely vertically
+          centered). Forcing the iframe to a small height via Tailwind's
+          arbitrary-value + !important clipped the value below the visible
+          slice; to the operator that looked like "CVV and expiry only
+          appear on hover" because the iframe's internal styling shifted
+          the visible portion in response to hover/focus.
+        - We let each iframe render at the SDK's natural height now so the
+          value is always visible. Width is overridden to 100% so each
+          field fills its column. The visual is taller than the earlier
+          compact look; if a denser layout is needed, the right path is
+          to pass `styles: { lineHeight, fontSize }` into renderFields
+          instead of clamping the iframe height from the outside.
+      */}
       <div className={status === "ready" ? "" : "hidden"}>
         <div className="space-y-3">
           <div>
             <label className="text-xs font-medium text-gray-500">Card number</label>
             <div
               id="ap-viewer-card-number"
-              className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!h-[36px] [&_iframe]:!w-full"
+              className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!w-full"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -178,14 +194,14 @@ export function CardViewer({
               <label className="text-xs font-medium text-gray-500">Expiry</label>
               <div
                 id="ap-viewer-expiry"
-                className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!h-[36px] [&_iframe]:!w-full"
+                className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!w-full"
               />
             </div>
             <div>
               <label className="text-xs font-medium text-gray-500">CVV</label>
               <div
                 id="ap-viewer-cvv"
-                className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!h-[36px] [&_iframe]:!w-full"
+                className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!w-full"
               />
             </div>
           </div>

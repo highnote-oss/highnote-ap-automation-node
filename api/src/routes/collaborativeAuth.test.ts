@@ -346,6 +346,43 @@ describe("POST /collaborative-auth — signature & registration", () => {
 
     expect(res.statusCode).toBe(503);
   });
+
+  it("acknowledges a signed activation ping (no CA request) with 200", async () => {
+    // Highnote verifies a newly-registered endpoint by POSTing a signed
+    // NOTIFICATION_ACTIVATION ping that carries no
+    // collaborativeAuthorizationRequest. The signature is valid but there is
+    // no CA request to decide on, so the endpoint must still answer 200 or it
+    // is left ACTIVATION_FAILED.
+    const body = {
+      data: {
+        node: {
+          __typename: "NotificationEvent",
+          id: "nee_" + randomUUID(),
+          name: "NOTIFICATION_ACTIVATION",
+          node: {
+            __typename: "NotificationTargetActivationEvent",
+            ping: "pong",
+          },
+        },
+      },
+      extensions: { signatureTimestamp: Date.now() },
+    };
+    const raw = JSON.stringify(body);
+    const res = await app.inject({
+      method: "POST",
+      url: "/collaborative-auth",
+      headers: {
+        "highnote-signature": signPayload(raw),
+        "content-type": "application/json",
+      },
+      payload: raw,
+    });
+
+    expect(res.statusCode).toBe(200);
+    // The ping must not create a decision row.
+    await waitForDecisionPersist();
+    expect(db.select().from(collabAuthDecisions).all()).toHaveLength(0);
+  });
 });
 
 describe("POST /collaborative-auth — latency budget", () => {

@@ -78,9 +78,17 @@ async function dispatchInvoiceTransition(
     const cardId = eventData.cardId;
     if (!cardId) return;
 
-    const isAuthorized = eventType === NotificationEventName.CARD_PAYMENT_AUTHORIZED_EVENT;
-    const isCleared = eventType === NotificationEventName.CARD_PAYMENT_CLEARED_EVENT;
-    if (!isAuthorized && !isCleared) return;
+    // Match the notification event names Highnote actually delivers (the
+    // CARD_PAYMENT_*_EVENT names are deprecated aliases that never arrive). A
+    // single-step auth+clear — the AP "pay the invoice" path — settles the
+    // invoice in one event, so it is grouped with the clearing transition.
+    const isAuthorized =
+      eventType === NotificationEventName.PAYMENT_CARD_AUTHORIZATION_APPROVED;
+    const settles =
+      eventType === NotificationEventName.PAYMENT_CARD_CLEARED ||
+      eventType ===
+        NotificationEventName.PAYMENT_CARD_AUTHORIZATION_AND_CLEAR_APPROVED;
+    if (!isAuthorized && !settles) return;
 
     const invoice = db
       .select()
@@ -115,7 +123,7 @@ async function dispatchInvoiceTransition(
       return;
     }
 
-    // isCleared
+    // settles — clearing or single-step auth+clear
     if (
       (TERMINAL_CLEARED_STATUSES as readonly InvoiceStatus[]).includes(
         invoice.status as InvoiceStatus,
@@ -210,12 +218,19 @@ export async function webhookRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "Invalid JSON payload" });
       }
 
-      const eventId = (event.id as string | undefined) ?? null;
+      // Highnote delivers a NotificationEvent nested under `data.node`:
+      //   { data: { node: { id, name, node: <event detail with cardId, amounts> } } }
+      // The event TYPE is `data.node.name` (e.g. PAYMENT_CARD_AUTHORIZATION_APPROVED)
+      // and the per-event detail is `data.node.node`. Fall back to top-level
+      // fields so any non-nested delivery still parses rather than going UNKNOWN.
+      const node = (
+        event.data as
+          | { node?: { id?: string; name?: string; node?: unknown } }
+          | undefined
+      )?.node;
+      const eventId = node?.id ?? (event.id as string | undefined) ?? null;
       const eventType =
-        (event.name as string) ??
-        (event.type as string) ??
-        ((event.data as Record<string, unknown>)?.type as string) ??
-        "UNKNOWN";
+        node?.name ?? (event.name as string) ?? (event.type as string) ?? "UNKNOWN";
       const isReplay = request.headers["highnote-replay"] !== undefined;
 
       // Persist BEFORE dispatch so a replay can re-derive state if dispatch crashes.
@@ -237,7 +252,11 @@ export async function webhookRoutes(app: FastifyInstance) {
       // Dispatch invoice state transitions. The helper catches and logs
       // any thrown error so we always return 200 here — the raw event row
       // above is the source of truth for replay.
-      const eventData = (event.data ?? {}) as CardPaymentEventData;
+      // When the event is nested, the detail is data.node.node; fall back to {}
+      // (NOT the data.node wrapper) so a missing inner shape cleanly no-ops in
+      // dispatch instead of reading cardId off the wrapper. Non-nested
+      // deliveries fall back to event.data.
+      const eventData = (node ? (node.node ?? {}) : (event.data ?? {})) as CardPaymentEventData;
       await dispatchInvoiceTransition(app.log, eventType, eventData);
 
       return reply.status(200).send({ received: true });

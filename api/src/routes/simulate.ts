@@ -72,7 +72,12 @@ export async function simulateRoutes(app: FastifyInstance) {
         // `z.nativeEnum(Iso4217Alpha3SupportedCurrency)`, so any value that
         // reaches this row is already a valid enum member. The cast bridges
         // the Drizzle string type back to the SDK enum without re-parsing.
-        const event = await highnote.test.transactions.authorize({
+        // Single-step auth + clear models an AP payment: the card is single-use
+        // and pays the invoice in one settlement, so the invoice moves
+        // CARD_ISSUED -> CLEARED rather than stalling at AUTHORIZED. The
+        // authorization half still routes through the collaborative-auth
+        // endpoint for a real-time decision.
+        const event = await highnote.test.transactions.authAndClear({
           cardId: row.cardId,
           amount: {
             value: request.body.amountCents,

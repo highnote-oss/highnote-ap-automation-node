@@ -16,9 +16,8 @@ import {
 
 const SECRET = "test-secret-do-not-use";
 
-const { getSigningKey, getPublicStatus } = vi.hoisted(() => ({
-  getSigningKey: vi.fn<() => string | null>(() => SECRET),
-  getPublicStatus: vi.fn(() => ({
+const { getSigningKey, getPublicStatus, getStatus } = vi.hoisted(() => {
+  const STATUS = {
     endpointId: "ep_test",
     name: "bay19-auto-test",
     status: "ACTIVE" as const,
@@ -27,12 +26,18 @@ const { getSigningKey, getPublicStatus } = vi.hoisted(() => ({
     hasSigningKey: true,
     source: "auto" as const,
     publicUrl: "https://example.test/collaborative-auth",
-  })),
-}));
+  };
+  return {
+    getSigningKey: vi.fn<() => string | null>(() => SECRET),
+    getPublicStatus: vi.fn(() => STATUS),
+    getStatus: vi.fn(async () => STATUS),
+  };
+});
 
 vi.mock("../services/collabAuthRegistration.js", () => ({
   getSigningKey,
   getPublicStatus,
+  getStatus,
 }));
 
 import { sqlite, db } from "../db/index.js";
@@ -273,6 +278,28 @@ describe("POST /collaborative-auth — decision tree", () => {
     expect(row?.invoiceId).toBe(invoiceId);
   });
 
+  it("declines an odd-cent amount with DECLINED (demo even/odd rule)", async () => {
+    seedInvoice({ amountCents: 10_000, expectedMcc: null });
+
+    const { statusCode, body } = await postSigned(app, { requestedAmount: 5_001 });
+
+    expect(statusCode).toBe(200);
+    expect(body.responseCode).toBe(
+      CollaborativeAuthorizationResponseCode.DECLINED,
+    );
+  });
+
+  it("approves an even-cent amount (demo even/odd rule)", async () => {
+    seedInvoice({ amountCents: 10_000, expectedMcc: null });
+
+    const { statusCode, body } = await postSigned(app, { requestedAmount: 5_002 });
+
+    expect(statusCode).toBe(200);
+    expect(body.responseCode).toBe(
+      CollaborativeAuthorizationResponseCode.APPROVED,
+    );
+  });
+
   it("declines with DUPLICATE_TRANSACTION when the single-use card was already consumed", async () => {
     seedInvoice({ status: "AUTHORIZED" satisfies InvoiceStatus });
 
@@ -345,6 +372,37 @@ describe("POST /collaborative-auth — signature & registration", () => {
     });
 
     expect(res.statusCode).toBe(503);
+  });
+
+  it("acknowledges a signed activation ping with 200", async () => {
+    // The exact verification request Highnote POSTs to activate an endpoint: a
+    // signed CollaborativeAuthorizationEndpointActivationRequest ({ ping: "pong" })
+    // — it has a collaborativeAuthorizationRequest but NO paymentCard. The
+    // endpoint must answer 2XX or it is left ACTIVATION_FAILED.
+    const body = {
+      data: {
+        collaborativeAuthorizationRequest: {
+          __typename: "CollaborativeAuthorizationEndpointActivationRequest",
+          ping: "pong",
+        },
+      },
+      extensions: { signatureTimestamp: Date.now() },
+    };
+    const raw = JSON.stringify(body);
+    const res = await app.inject({
+      method: "POST",
+      url: "/collaborative-auth",
+      headers: {
+        "highnote-signature": signPayload(raw),
+        "content-type": "application/json",
+      },
+      payload: raw,
+    });
+
+    expect(res.statusCode).toBe(200);
+    // The ping must not create a decision row.
+    await waitForDecisionPersist();
+    expect(db.select().from(collabAuthDecisions).all()).toHaveLength(0);
   });
 });
 

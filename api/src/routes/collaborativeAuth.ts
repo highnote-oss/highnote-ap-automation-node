@@ -29,7 +29,8 @@ const CollabAuthDecisionsQuerySchema = z.object({
  *   3. Invoice cancelled → INVALID_TRANSACTION
  *   4. requestedAmount > invoice amount → INSUFFICIENT_FUNDS
  *   5. Invoice has expectedMcc AND merchant MCC mismatches → INVALID_MERCHANT_CATEGORY_CODE
- *   6. Otherwise → APPROVED
+ *   6. Odd-cent amount → DECLINED  (demo rule: even cents approve, odd decline)
+ *   7. Otherwise (even-cent amount) → APPROVED
  *
  * The decision row is persisted fire-and-forget so the response doesn't
  * block on the write — every millisecond counts under the 2s budget.
@@ -61,11 +62,36 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
         signature,
         signingKey,
       });
-      if (!verification.valid || !verification.request) {
+      if (!verification.valid) {
         return reply.status(401).send({ error: "Invalid signature" });
       }
 
-      const caRequest = verification.request.data.collaborativeAuthorizationRequest;
+      // `verifyCollaborativeAuthSignature` returns the entire parsed payload as
+      // `request`. A real authorization carries a
+      // `data.collaborativeAuthorizationRequest` with a `paymentCard`.
+      const caRequest =
+        verification.request?.data?.collaborativeAuthorizationRequest;
+
+      // Activation handshake. Highnote verifies a newly-registered endpoint by
+      // POSTing a signed request whose `collaborativeAuthorizationRequest` is a
+      // `CollaborativeAuthorizationEndpointActivationRequest` ({ ping: "pong" })
+      // — present, but with NO `paymentCard`. Acknowledge it with any 2XX so the
+      // endpoint transitions to ACTIVE. Dereferencing the absent paymentCard is
+      // what threw a 500 here and left the endpoint stuck in ACTIVATION_FAILED.
+      // The activation ping has no paymentCard; a real authorization always
+      // carries paymentCard + requestedAmount + merchantDetails. Anything
+      // missing a field the decision needs is not a decidable authorization —
+      // acknowledge with 200 rather than dereferencing it and throwing a 500
+      // (which would push Highnote to stand-in on the 2-second budget path).
+      if (
+        !caRequest ||
+        !caRequest.paymentCard ||
+        !caRequest.requestedAmount ||
+        !caRequest.merchantDetails
+      ) {
+        request.log.info("CA endpoint ping / non-authorization payload acknowledged");
+        return reply.status(200).send({ received: true });
+      }
       const cardId = caRequest.paymentCard.id;
       const requestedAmount = caRequest.requestedAmount;
       const merchantCategoryCode = caRequest.merchantDetails.merchantCategoryCode;
@@ -113,9 +139,20 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
             reason: `MCC mismatch (expected ${invoice.expectedMcc}, got ${merchantCategoryCode})`,
           };
         }
+        // Demo decision rule: approve even-cent amounts, decline odd-cent
+        // amounts. The amount is in cents, so `value % 2` tests the trailing
+        // cent digit ($10.04 -> approve, $10.05 -> decline). This is a
+        // deterministic hook for exercising the approve/decline paths in the
+        // Test environment — change the amount's last cent to flip the outcome.
+        if (requestedAmount.value % 2 !== 0) {
+          return {
+            code: CollaborativeAuthorizationResponseCode.DECLINED,
+            reason: "odd-cent amount (demo rule: even cents approve, odd decline)",
+          };
+        }
         return {
           code: CollaborativeAuthorizationResponseCode.APPROVED,
-          reason: "approved",
+          reason: "even-cent amount (demo rule: even cents approve, odd decline)",
         };
       };
 
@@ -203,7 +240,8 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
       },
     },
     async () => {
-      return collabAuthRegistration.getPublicStatus();
+      // Live-refresh from Highnote so the badge reflects the true status.
+      return collabAuthRegistration.getStatus();
     },
   );
 
@@ -221,7 +259,7 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
       },
     },
     async () => {
-      await collabAuthRegistration.init();
+      await collabAuthRegistration.register();
       return collabAuthRegistration.getPublicStatus();
     },
   );

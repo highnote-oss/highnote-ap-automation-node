@@ -12,7 +12,20 @@
  * when no signing key is in memory, depending on caller policy).
  */
 
+import { randomUUID } from "node:crypto";
 import { highnote } from "./highnote.js";
+
+/**
+ * Unique per-process id, echoed by `GET /health`. Used to detect when Render
+ * has cut external traffic over to THIS instance during a deploy (see
+ * `waitForExternalCutover`).
+ */
+const BOOT_ID = randomUUID();
+
+/** This process's boot id — surfaced on `/health` for cutover detection. */
+export function getBootId(): string {
+  return BOOT_ID;
+}
 
 export type RegistrationStatus =
   | "NOT_REGISTERED"
@@ -98,11 +111,14 @@ function mapEndpointStatus(input: string | undefined): RegistrationStatus {
   }
 }
 
-async function cleanupStaleEndpoints(currentName: string): Promise<number> {
+// Remove every prior bay19-auto-* endpoint before registering a fresh one.
+// Runs before addEndpoint, so the new endpoint does not exist yet — we must NOT
+// skip same-named endpoints (re-deploying the same commit reuses the name), or
+// stale ACTIVATION_FAILED endpoints accumulate and hit the 5-endpoint limit.
+async function cleanupStaleEndpoints(): Promise<number> {
   let removed = 0;
   for await (const ep of highnote.collaborativeAuth.list()) {
     if (!ep.name?.startsWith(ENDPOINT_NAME_PREFIX)) continue;
-    if (ep.name === currentName) continue;
     try {
       await highnote.collaborativeAuth.removeEndpoint({ endpointId: ep.id });
       removed += 1;
@@ -134,7 +150,7 @@ async function doRegister(): Promise<void> {
 
   try {
     try {
-      const removed = await cleanupStaleEndpoints(name);
+      const removed = await cleanupStaleEndpoints();
       if (removed > 0) {
         console.log(
           `[collab-auth] Removed ${removed} stale ${ENDPOINT_NAME_PREFIX}* endpoint(s) before registering.`,
@@ -190,16 +206,94 @@ async function doRegister(): Promise<void> {
   }
 }
 
+const CUTOVER_POLL_ATTEMPTS = 30;
+const CUTOVER_POLL_MS = 5000; // up to ~2.5 min waiting for Render to cut over
+const ACTIVATION_RETRY_ATTEMPTS = 4;
+const ACTIVATION_RETRY_MS = 4000;
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Block until Render has cut external traffic over to THIS instance. During a
+ * deploy the public URL keeps routing to the OLD instance — which holds a
+ * different signing key — until the new one passes its health check, so any
+ * activation before cutover fails (Highnote's verification ping reaches the old
+ * instance and gets a 401). We poll our own public `/health` and wait until it
+ * echoes this process's boot id. Best-effort: on timeout we proceed anyway.
+ */
+async function waitForExternalCutover(baseUrl: string): Promise<void> {
+  for (let i = 0; i < CUTOVER_POLL_ATTEMPTS; i++) {
+    try {
+      const res = await fetch(`${baseUrl}/health`);
+      if (res.ok) {
+        const body = (await res.json()) as { bootId?: string };
+        if (body.bootId === BOOT_ID) {
+          console.log(
+            `[collab-auth] External cutover confirmed after ~${(i * CUTOVER_POLL_MS) / 1000}s.`,
+          );
+          return;
+        }
+      }
+    } catch {
+      // Public URL not reachable from here yet; keep waiting.
+    }
+    await delay(CUTOVER_POLL_MS);
+  }
+  console.warn(
+    "[collab-auth] External cutover not confirmed within window; registering anyway.",
+  );
+}
+
+/**
+ * Register, retrying until the endpoint reports ACTIVE. We first wait for Render
+ * to route external traffic to this instance (so the activation verification
+ * ping actually reaches us), then run the full registration — the same path the
+ * manual Re-register button takes. A few retries cover any residual flakiness.
+ * Each attempt's cleanup removes the prior endpoint so they don't pile up.
+ * Returns immediately when there's nothing to register (local, no public URL).
+ */
+async function doRegisterWithRetry(): Promise<void> {
+  const { url } = resolvePublicUrl();
+  if (!url) {
+    await doRegister();
+    return;
+  }
+  await waitForExternalCutover(url.replace(/\/collaborative-auth$/, ""));
+  for (let attempt = 1; attempt <= ACTIVATION_RETRY_ATTEMPTS; attempt++) {
+    await doRegister();
+    if (state.status === "ACTIVE" || state.status === "NOT_REGISTERED") return;
+    if (attempt < ACTIVATION_RETRY_ATTEMPTS) {
+      console.warn(
+        `[collab-auth] status=${state.status} after attempt ${attempt}/${ACTIVATION_RETRY_ATTEMPTS}; retrying in ${ACTIVATION_RETRY_MS}ms`,
+      );
+      await delay(ACTIVATION_RETRY_MS);
+    }
+  }
+}
+
 /**
  * Idempotent, single-flight registration. Concurrent callers await the same
  * promise. Errors are caught and recorded in state — does not throw.
  */
 export function init(): Promise<void> {
   if (inFlight) return inFlight;
-  inFlight = doRegister().finally(() => {
+  inFlight = doRegisterWithRetry().finally(() => {
     inFlight = null;
   });
   return inFlight;
+}
+
+/**
+ * Manual re-registration (the operator "Re-register" button). Runs a single
+ * warm registration with NO cutover wait or retry loop — by the time an
+ * operator clicks, the instance is already serving, so the request returns
+ * promptly instead of blocking on the deploy-time cutover poll (which could
+ * otherwise hang the HTTP request well past proxy/browser timeouts). The
+ * cutover wait + retry belong only to startup (init()).
+ */
+export function register(): Promise<void> {
+  return doRegister();
 }
 
 /** In-memory signing key for the receiver. `null` means signature verification is skipped. */
@@ -215,7 +309,7 @@ export function getPublicEndpointUrl(): string | null {
   return resolvePublicUrl().url;
 }
 
-/** Public-safe view of registration state. Never includes the signing key. */
+/** Public-safe view of cached registration state. Never includes the signing key. */
 export function getPublicStatus(): PublicStatus {
   return {
     endpointId: state.endpointId,
@@ -227,4 +321,29 @@ export function getPublicStatus(): PublicStatus {
     source: state.source,
     publicUrl: state.publicUrl,
   };
+}
+
+/**
+ * Public status with a best-effort live refresh from Highnote, so the UI shows
+ * the true current state (ACTIVE / PENDING_VERIFICATION / ACTIVATION_FAILED /
+ * DEACTIVATED) rather than the value cached at registration time. The CA SDK
+ * has no get-by-id, so we scan `list()` for our endpoint. On any lookup failure
+ * we fall back to the cached state.
+ */
+export async function getStatus(): Promise<PublicStatus> {
+  if (state.endpointId) {
+    try {
+      for await (const ep of highnote.collaborativeAuth.list()) {
+        if (ep.id === state.endpointId) {
+          state.status = mapEndpointStatus(ep.status);
+          if (ep.name) state.name = ep.name;
+          break;
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[collab-auth] Live status refresh failed: ${message}`);
+    }
+  }
+  return getPublicStatus();
 }

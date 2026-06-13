@@ -19,6 +19,46 @@ interface CardViewerProps {
 
 type ViewerStatus = "idle" | "loading" | "ready" | "error";
 
+/** Friendly labels for the SDK's `onCopyToClipboardSuccess` field identifiers. */
+const FIELD_LABELS: Record<string, string> = {
+  cardNumber: "Card number",
+  cvv: "CVV",
+  expirationDate: "Expiry",
+};
+
+const FIELD_HOST_IDS = [
+  "ap-viewer-card-number",
+  "ap-viewer-expiry",
+  "ap-viewer-cvv",
+] as const;
+
+/**
+ * Force the cross-origin SDK iframes to repaint. Some browsers leave the iframe
+ * content unrastered after it finishes loading — the value only appears once a
+ * hover / scroll / resize invalidates the region.
+ *
+ * Each call TOGGLES the iframe height by a few px (33px ⇄ the 28px class value).
+ * Resizing forces the embedded document to re-layout and raster. The toggle is
+ * the important part: a synchronous set-then-revert is coalesced by the browser
+ * to a no-op (start == end) and never repaints — which is exactly why the first
+ * attempt failed. By flipping the value and holding it until the next sweep,
+ * each state is actually painted. The height normally comes from a Tailwind
+ * `!important` class (h-7 = 28px), so we override inline (33px) and remove the
+ * override to fall back to it. Sweeps are scheduled an even number of times so
+ * we settle back on the class height.
+ */
+function forceIframeRepaint() {
+  for (const id of FIELD_HOST_IDS) {
+    const iframe = document.getElementById(id)?.querySelector("iframe");
+    if (!(iframe instanceof HTMLIFrameElement)) continue;
+    if (iframe.style.getPropertyValue("height") === "33px") {
+      iframe.style.removeProperty("height");
+    } else {
+      iframe.style.setProperty("height", "33px", "important");
+    }
+  }
+}
+
 interface CardViewerError {
   message?: string;
   name?: string;
@@ -60,7 +100,9 @@ export function CardViewer({
   const [error, setError] = useState<string | null>(null);
   const [masked, setMasked] = useState(true);
   const [mountKey, setMountKey] = useState(0);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
   const toggleMaskRef = useRef<(() => void) | null>(null);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // The SDK has an internal race: the cardNumber iframe broadcasts
   // PAYMENT_CARD_DATA_READY to siblings via postMessage immediately after its
@@ -99,10 +141,26 @@ export function CardViewer({
         // SDK queries for them via `selector`.
         await new Promise((r) => setTimeout(r, 0));
         if (cancelled) return;
+        // Per-field styling applied inside the SDK iframes. `cursor: pointer`
+        // advertises the click-to-copy affordance (clipboard is enabled below).
+        const fieldStyles = {
+          fontSize: "0.95rem",
+          color: "#111827",
+          cursor: "pointer",
+        };
         const { unmount, toggleCardNumberMask } = await renderFields({
           clientToken: resolvedTokenValue,
           paymentCardId,
           environment: "test",
+          // Click a field to copy its value to the clipboard. Enabled by
+          // default in the SDK; set explicitly for intent.
+          enableClipboard: true,
+          onCopyToClipboardSuccess: ({ field }) => {
+            if (cancelled) return;
+            setCopiedField(field);
+            if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+            copiedTimerRef.current = setTimeout(() => setCopiedField(null), 1500);
+          },
           onError: (err: CardViewerError) => {
             if (cancelled) return;
             setError(err?.message ?? "Failed to load card details");
@@ -119,9 +177,16 @@ export function CardViewer({
             retryCountRef.current = 0;
           },
           elements: {
-            cardNumber: { selector: "#ap-viewer-card-number" },
-            cvv: { selector: "#ap-viewer-cvv" },
-            expirationDate: { selector: "#ap-viewer-expiry" },
+            cardNumber: {
+              selector: "#ap-viewer-card-number",
+              styles: {
+                ...fieldStyles,
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                letterSpacing: "0.05em",
+              },
+            },
+            cvv: { selector: "#ap-viewer-cvv", styles: fieldStyles },
+            expirationDate: { selector: "#ap-viewer-expiry", styles: fieldStyles },
           },
         });
         // Effect was torn down (e.g. StrictMode cleanup) while renderFields was
@@ -174,10 +239,40 @@ export function CardViewer({
     };
   }, [paymentCardId, resolvedTokenValue, mountKey]);
 
+  // Clear any pending "copied" reset timer when the component unmounts.
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    };
+  }, []);
+
+  // Once the fields are ready, force the SDK iframes to repaint. The cvv/expiry
+  // values can otherwise stay blank until the user hovers (the browser doesn't
+  // raster the freshly-loaded cross-origin iframe content on its own). We sweep
+  // across a ~1.5s window because the values can paint slightly after onReady,
+  // and each sweep must hold its nudge long enough to be painted (see
+  // forceIframeRepaint).
+  useEffect(() => {
+    if (status !== "ready") return;
+    // Even number of sweeps so the height settles back on the class value.
+    const sweepDelays = [0, 120, 300, 600, 1000, 1500];
+    const timers = sweepDelays.map((ms) => setTimeout(forceIframeRepaint, ms));
+    return () => timers.forEach(clearTimeout);
+  }, [status, mountKey]);
+
   function handleToggleMask() {
     toggleMaskRef.current?.();
     setMasked((prev) => !prev);
   }
+
+  // Render the SDK iframes into a container that is laid out and painted from
+  // "loading" onward — NOT display:none. Hiding the host with `hidden` until
+  // "ready" makes the cross-origin iframes load inside a display:none subtree,
+  // which compounds the blank-until-hover problem. Keeping it visible is
+  // necessary but NOT sufficient on its own: the iframes still need an explicit
+  // repaint nudge once loaded (see forceIframeRepaint) to reliably show the
+  // values without a hover.
+  const fieldsVisible = status === "loading" || status === "ready";
 
   // Only surface the authed query's pending/error states when we actually
   // depend on it. When the caller supplied a token, the query is disabled
@@ -202,13 +297,20 @@ export function CardViewer({
       <div className="mb-4 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-gray-900">Virtual card</h3>
         {status === "ready" && (
-          <button
-            type="button"
-            onClick={handleToggleMask}
-            className="text-xs font-medium text-indigo-600 hover:text-indigo-800"
-          >
-            {masked ? "Show number" : "Hide number"}
-          </button>
+          <div className="flex items-center gap-3">
+            {copiedField && (
+              <span className="text-xs font-medium text-green-600" role="status">
+                Copied {FIELD_LABELS[copiedField] ?? copiedField}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={handleToggleMask}
+              className="text-xs font-medium text-indigo-600 hover:text-indigo-800"
+            >
+              {masked ? "Show number" : "Hide number"}
+            </button>
+          </div>
         )}
       </div>
 
@@ -217,27 +319,25 @@ export function CardViewer({
 
       {/*
         Iframe sizing notes:
-        - The SDK injects iframes with `width: 300px; height: 150px` defaults
-          and positions the value somewhere in that area (likely vertically
-          centered). Forcing the iframe to a small height via Tailwind's
-          arbitrary-value + !important clipped the value below the visible
-          slice; to the operator that looked like "CVV and expiry only
-          appear on hover" because the iframe's internal styling shifted
-          the visible portion in response to hover/focus.
-        - We let each iframe render at the SDK's natural height now so the
-          value is always visible. Width is overridden to 100% so each
-          field fills its column. The visual is taller than the earlier
-          compact look; if a denser layout is needed, the right path is
-          to pass `styles: { lineHeight, fontSize }` into renderFields
-          instead of clamping the iframe height from the outside.
+        - The SDK doesn't set an iframe height, so the browser falls back to
+          the HTML default of 150px. The value renders near the top and the
+          rest is dead space — that's the "weird tall boxes" look.
+        - The SDK's per-field `styles` prop only allows typographic props
+          (fontSize, lineHeight, color, …) — not height/padding — so it
+          can't shrink the box. The only lever is the iframe element's
+          height, which we override from the outside to h-7 (28px), paired
+          with tight py-1 wrapper padding for a compact field.
+        - The value is top-aligned in the iframe (~10px offset). 28px is about
+          as short as it goes before the value clips (verified against SDK
+          1.4.2). Width is overridden to 100% so each field fills its column.
       */}
-      <div className={status === "ready" ? "" : "hidden"}>
+      <div className={fieldsVisible ? "max-w-xs" : "hidden"}>
         <div className="space-y-3">
           <div>
             <label className="text-xs font-medium text-gray-500">Card number</label>
             <div
               id="ap-viewer-card-number"
-              className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!w-full"
+              className="mt-1 rounded-md border border-gray-200 px-2 py-1 [&_iframe]:!h-7 [&_iframe]:!w-full"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -245,17 +345,22 @@ export function CardViewer({
               <label className="text-xs font-medium text-gray-500">Expiry</label>
               <div
                 id="ap-viewer-expiry"
-                className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!w-full"
+                className="mt-1 rounded-md border border-gray-200 px-2 py-1 [&_iframe]:!h-7 [&_iframe]:!w-full"
               />
             </div>
             <div>
               <label className="text-xs font-medium text-gray-500">CVV</label>
               <div
                 id="ap-viewer-cvv"
-                className="mt-1 rounded-md border border-gray-200 p-2 [&_iframe]:!w-full"
+                className="mt-1 rounded-md border border-gray-200 px-2 py-1 [&_iframe]:!h-7 [&_iframe]:!w-full"
               />
             </div>
           </div>
+          {status === "ready" && (
+            <p className="text-xs text-gray-400">
+              Click any field to copy it to your clipboard.
+            </p>
+          )}
         </div>
       </div>
     </section>

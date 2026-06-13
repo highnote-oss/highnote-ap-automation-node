@@ -252,7 +252,11 @@ export async function webhookRoutes(app: FastifyInstance) {
       // Dispatch invoice state transitions. The helper catches and logs
       // any thrown error so we always return 200 here — the raw event row
       // above is the source of truth for replay.
-      const eventData = (node?.node ?? event.data ?? {}) as CardPaymentEventData;
+      // When the event is nested, the detail is data.node.node; fall back to {}
+      // (NOT the data.node wrapper) so a missing inner shape cleanly no-ops in
+      // dispatch instead of reading cardId off the wrapper. Non-nested
+      // deliveries fall back to event.data.
+      const eventData = (node ? (node.node ?? {}) : (event.data ?? {})) as CardPaymentEventData;
       await dispatchInvoiceTransition(app.log, eventType, eventData);
 
       return reply.status(200).send({ received: true });

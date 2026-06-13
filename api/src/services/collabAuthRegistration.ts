@@ -284,6 +284,18 @@ export function init(): Promise<void> {
   return inFlight;
 }
 
+/**
+ * Manual re-registration (the operator "Re-register" button). Runs a single
+ * warm registration with NO cutover wait or retry loop — by the time an
+ * operator clicks, the instance is already serving, so the request returns
+ * promptly instead of blocking on the deploy-time cutover poll (which could
+ * otherwise hang the HTTP request well past proxy/browser timeouts). The
+ * cutover wait + retry belong only to startup (init()).
+ */
+export function register(): Promise<void> {
+  return doRegister();
+}
+
 /** In-memory signing key for the receiver. `null` means signature verification is skipped. */
 export function getSigningKey(): string | null {
   return state.signingKeySecret;

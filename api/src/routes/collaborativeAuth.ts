@@ -78,8 +78,18 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
       // — present, but with NO `paymentCard`. Acknowledge it with any 2XX so the
       // endpoint transitions to ACTIVE. Dereferencing the absent paymentCard is
       // what threw a 500 here and left the endpoint stuck in ACTIVATION_FAILED.
-      if (!caRequest || !caRequest.paymentCard) {
-        request.log.info("CA endpoint activation ping acknowledged");
+      // The activation ping has no paymentCard; a real authorization always
+      // carries paymentCard + requestedAmount + merchantDetails. Anything
+      // missing a field the decision needs is not a decidable authorization —
+      // acknowledge with 200 rather than dereferencing it and throwing a 500
+      // (which would push Highnote to stand-in on the 2-second budget path).
+      if (
+        !caRequest ||
+        !caRequest.paymentCard ||
+        !caRequest.requestedAmount ||
+        !caRequest.merchantDetails
+      ) {
+        request.log.info("CA endpoint ping / non-authorization payload acknowledged");
         return reply.status(200).send({ received: true });
       }
       const cardId = caRequest.paymentCard.id;
@@ -249,7 +259,7 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
       },
     },
     async () => {
-      await collabAuthRegistration.init();
+      await collabAuthRegistration.register();
       return collabAuthRegistration.getPublicStatus();
     },
   );

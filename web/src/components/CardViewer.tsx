@@ -37,15 +37,15 @@ const FIELD_HOST_IDS = [
  * content unrastered after it finishes loading — the value only appears once a
  * hover / scroll / resize invalidates the region.
  *
- * Each call TOGGLES the iframe height by 1px (33px ⇄ the 32px class value).
+ * Each call TOGGLES the iframe height by a few px (33px ⇄ the 28px class value).
  * Resizing forces the embedded document to re-layout and raster. The toggle is
  * the important part: a synchronous set-then-revert is coalesced by the browser
  * to a no-op (start == end) and never repaints — which is exactly why the first
  * attempt failed. By flipping the value and holding it until the next sweep,
  * each state is actually painted. The height normally comes from a Tailwind
- * `!important` class, so we override inline (33px) and remove the override to
- * fall back to it (32px). Sweeps are scheduled an even number of times so we
- * settle back on the class height.
+ * `!important` class (h-7 = 28px), so we override inline (33px) and remove the
+ * override to fall back to it. Sweeps are scheduled an even number of times so
+ * we settle back on the class height.
  */
 function forceIframeRepaint() {
   for (const id of FIELD_HOST_IDS) {

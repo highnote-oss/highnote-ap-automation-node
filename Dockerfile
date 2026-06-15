@@ -2,6 +2,10 @@
 FROM node:22.22.3-alpine3.22 AS web-builder
 WORKDIR /app/web
 COPY web/package*.json ./
+# Match the npm that generates the lockfile (npm 11). The node:22 image ships
+# npm 10.9.x, whose `npm ci` re-resolves in-range transitive deps and rejects
+# a lockfile pinned by a newer npm.
+RUN npm install -g npm@11
 RUN npm ci
 COPY web/ ./
 RUN npm run build
@@ -12,6 +16,7 @@ WORKDIR /app/api
 # Native modules (better-sqlite3, bcrypt) compile from source on Alpine.
 RUN apk add --no-cache python3 make g++
 COPY api/package*.json ./
+RUN npm install -g npm@11
 RUN npm ci
 COPY api/tsconfig.json ./
 COPY api/src ./src

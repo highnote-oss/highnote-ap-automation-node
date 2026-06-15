@@ -144,7 +144,12 @@ function buildCaRequestBody(opts: BuildRequestOpts = {}): Record<string, unknown
         },
         merchantDetails: {
           merchantId: "m_1",
-          merchantCategoryCode: opts.merchantCategoryCode ?? "5411",
+          // Highnote's CA wire payload carries the MCC as `categoryCode` (see
+          // the SDK's CollaborativeAuthRequest type), NOT `merchantCategoryCode`.
+          // The fixture must mirror the wire so the handler's extraction is
+          // actually exercised — reverting the handler to the wrong key now
+          // fails the approve-path tests instead of silently passing.
+          categoryCode: opts.merchantCategoryCode ?? "5411",
           description: "Test Merchant",
           countryCodeAlpha3: "USA",
         },
@@ -333,6 +338,25 @@ describe("POST /collaborative-auth — decision tree", () => {
     expect(statusCode).toBe(200);
     expect(body.responseCode).toBe(
       CollaborativeAuthorizationResponseCode.INVALID_MERCHANT_CATEGORY_CODE,
+    );
+  });
+
+  it("approves when the merchant MCC matches the invoice's expectedMcc", async () => {
+    // Regression guard: the handler must read the MCC from the wire's
+    // `categoryCode`. Reading the SDK-typed-but-absent `merchantCategoryCode`
+    // yields undefined, which mismatches a constrained invoice and wrongly
+    // declines it (the production bug). An even amount keeps us off the
+    // odd-cent decline path so the only variable under test is the MCC match.
+    seedInvoice({ amountCents: 10_000, expectedMcc: "5411" });
+
+    const { statusCode, body } = await postSigned(app, {
+      requestedAmount: 5_000,
+      merchantCategoryCode: "5411",
+    });
+
+    expect(statusCode).toBe(200);
+    expect(body.responseCode).toBe(
+      CollaborativeAuthorizationResponseCode.APPROVED,
     );
   });
 });

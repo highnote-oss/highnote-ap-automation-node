@@ -94,16 +94,7 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
       }
       const cardId = caRequest.paymentCard.id;
       const requestedAmount = caRequest.requestedAmount;
-      // Highnote's CA wire payload delivers the MCC as `categoryCode`, but the
-      // SDK's CollaborativeAuthRequest type (incorrectly) declares it as
-      // `merchantCategoryCode` — a key that is absent on the wire and so reads
-      // back `undefined`, which silently failed every MCC check. Read the real
-      // wire field via a narrowing cast, falling back to the typed field in case
-      // a future SDK/platform release aligns the two.
-      const md = caRequest.merchantDetails as typeof caRequest.merchantDetails & {
-        categoryCode?: string;
-      };
-      const merchantCategoryCode = md.categoryCode ?? md.merchantCategoryCode;
+      const merchantCategoryCode = caRequest.merchantDetails.categoryCode;
 
       const invoice = db
         .select()

@@ -22,7 +22,7 @@
     "@fastify/swagger-ui": "^5.2.6",
     "@highnote-oss/nodejs-sdk": "^0.2.0",
     "bcrypt": "^6.0.0",
-    "better-sqlite3": "^12.9.0",
+    "better-sqlite3": "^12.11.1",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^1.0.0-rc.3",
     "fastify": "^5.8.5",

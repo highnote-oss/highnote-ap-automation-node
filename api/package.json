@@ -24,7 +24,7 @@
     "bcrypt": "^6.0.0",
     "better-sqlite3": "^12.9.0",
     "dotenv": "^17.4.2",
-    "drizzle-orm": "^1.0.0-rc.3",
+    "drizzle-orm": "^1.0.0-rc.4-273829f",
     "fastify": "^5.8.5",
     "fastify-raw-body": "^5.0.0",
     "fastify-type-provider-zod": "^6.1.0",

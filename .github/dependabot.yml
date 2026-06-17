@@ -3,41 +3,49 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 5
     groups:
-      actions-minor-and-patch:
-        update-types:
-          - "minor"
-          - "patch"
+      # Catch-all: every github-actions update lands in one monthly PR.
+      actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: "npm"
     directory: "/api"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 10
-    # Pin @types/node to the Node major used by CI / Render (22). Allow
-    # minor/patch within the major; block major bumps until we move the
-    # runtime forward.
     ignore:
+      # Pin @types/node to the Node major used by CI / Render (22): block
+      # major bumps until we move the runtime forward.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # Skip patch-level churn on type stubs -- low value, high frequency
+      # (these were half the noise in the combined PR). Minor bumps still
+      # come through; @types/node stays subject to the major pin above.
+      - dependency-name: "@types/*"
+        update-types: ["version-update:semver-patch"]
     groups:
-      api-minor-and-patch:
-        update-types:
-          - "minor"
-          - "patch"
+      # Catch-all (no update-types filter) so every remaining bump folds
+      # into one monthly PR -- including majors and off-track pre-release
+      # builds (e.g. drizzle 1.0.0-rc.x) that a minor/patch group lets
+      # escape as their own PRs. Breaking majors are caught by the PR's CI.
+      api:
+        patterns:
+          - "*"
 
   - package-ecosystem: "npm"
     directory: "/web"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 10
     ignore:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/*"
+        update-types: ["version-update:semver-patch"]
     groups:
-      web-minor-and-patch:
-        update-types:
-          - "minor"
-          - "patch"
+      web:
+        patterns:
+          - "*"

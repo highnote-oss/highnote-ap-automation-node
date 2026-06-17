@@ -94,7 +94,7 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
       }
       const cardId = caRequest.paymentCard.id;
       const requestedAmount = caRequest.requestedAmount;
-      const merchantCategoryCode = caRequest.merchantDetails.merchantCategoryCode;
+      const merchantCategoryCode = caRequest.merchantDetails.categoryCode;
 
       const invoice = db
         .select()

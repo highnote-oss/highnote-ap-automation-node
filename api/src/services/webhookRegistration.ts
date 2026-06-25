@@ -221,15 +221,23 @@ function snapshot(): PublicStatus {
   };
 }
 
+// Throttle window for the live status refresh — see the matching note in
+// collabAuthRegistration. Each refresh is one Highnote API call, and the
+// status route is polled by the SPA, so coalesce polls within this window.
+const STATUS_REFRESH_TTL_MS = 5_000;
+let lastLiveRefreshAt = 0;
+
 /**
  * Public-safe view of registration state. Never includes the signing key.
  *
  * When a targetId exists, best-effort live-refreshes the status from
  * Highnote so the UI reflects the true current state (PENDING_VERIFICATION
- * vs ACTIVE vs DEACTIVATED). On lookup failure, returns cached state.
+ * vs ACTIVE vs DEACTIVATED). On lookup failure, returns cached state. The
+ * upstream call is throttled to at most one per STATUS_REFRESH_TTL_MS.
  */
 export async function getStatus(): Promise<PublicStatus> {
-  if (state.targetId) {
+  if (state.targetId && Date.now() - lastLiveRefreshAt >= STATUS_REFRESH_TTL_MS) {
+    lastLiveRefreshAt = Date.now();
     try {
       const live = await highnote.webhooks.get(state.targetId);
       state.status = mapTargetStatus(live.status);

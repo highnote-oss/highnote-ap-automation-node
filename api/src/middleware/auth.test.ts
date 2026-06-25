@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
 import jwt from "jsonwebtoken";
-import { registerAuthHook, JWT_SECRET } from "./auth.js";
+import { registerAuthHook, requireAdmin, JWT_SECRET } from "./auth.js";
 
 function buildTestApp(): FastifyInstance {
   const app = Fastify();
@@ -104,5 +104,70 @@ describe("JWT auth middleware", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
+  });
+});
+
+describe("requireAdmin guard", () => {
+  function buildAdminApp(guard: typeof requireAdmin): FastifyInstance {
+    const app = Fastify();
+    registerAuthHook(app);
+    app.post(
+      "/api/admin-only",
+      { preHandler: guard },
+      async () => ({ ok: true }),
+    );
+    return app;
+  }
+
+  it("is a no-op when ADMIN_EMAILS is unset (single-user demo default)", async () => {
+    // The statically-imported guard was loaded without ADMIN_EMAILS in env.
+    const app = buildAdminApp(requireAdmin);
+    await app.ready();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/admin-only",
+      headers: { authorization: `Bearer ${signToken(1, "anyone@example.com")}` },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  describe("with ADMIN_EMAILS configured", () => {
+    afterEach(() => {
+      delete process.env.ADMIN_EMAILS;
+      vi.resetModules();
+    });
+
+    async function loadGuardWithAdmins(value: string): Promise<typeof requireAdmin> {
+      process.env.ADMIN_EMAILS = value;
+      vi.resetModules();
+      return (await import("./auth.js")).requireAdmin;
+    }
+
+    it("403s an authenticated non-admin", async () => {
+      const guard = await loadGuardWithAdmins("admin@example.com");
+      const app = buildAdminApp(guard);
+      await app.ready();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/admin-only",
+        headers: { authorization: `Bearer ${signToken(2, "user@example.com")}` },
+      });
+      expect(res.statusCode).toBe(403);
+    });
+
+    it("allows a listed admin (case-insensitive)", async () => {
+      const guard = await loadGuardWithAdmins("admin@example.com, ops@example.com");
+      const app = buildAdminApp(guard);
+      await app.ready();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/admin-only",
+        headers: { authorization: `Bearer ${signToken(3, "Admin@Example.com")}` },
+      });
+      expect(res.statusCode).toBe(200);
+    });
   });
 });

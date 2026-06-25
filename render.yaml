@@ -22,6 +22,11 @@ services:
       # JWT signing secret — let Render mint one at deploy time.
       - key: JWT_SECRET
         generateValue: true
+      # Allowlist of operator emails permitted to manage money-movement
+      # registration routes. Set in the dashboard; if unset, any authenticated
+      # user may re-register (the per-route cooldown is the only backstop).
+      - key: ADMIN_EMAILS
+        sync: false
       - key: HIGHNOTE_ENVIRONMENT
         value: test
       - key: SQLITE_PATH

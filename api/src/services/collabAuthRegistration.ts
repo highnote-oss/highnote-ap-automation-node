@@ -323,15 +323,25 @@ export function getPublicStatus(): PublicStatus {
   };
 }
 
+// Throttle window for the live status refresh. The status route is polled by
+// every operator's SPA, and each refresh costs one Highnote API call against
+// the same rate budget collaborative-auth needs to answer within its 2s
+// window. Coalescing polls inside this window keeps badge freshness without
+// letting a tight poll loop amplify into upstream churn.
+const STATUS_REFRESH_TTL_MS = 5_000;
+let lastLiveRefreshAt = 0;
+
 /**
  * Public status with a best-effort live refresh from Highnote, so the UI shows
  * the true current state (ACTIVE / PENDING_VERIFICATION / ACTIVATION_FAILED /
  * DEACTIVATED) rather than the value cached at registration time. The CA SDK
  * has no get-by-id, so we scan `list()` for our endpoint. On any lookup failure
- * we fall back to the cached state.
+ * we fall back to the cached state. The upstream call is throttled to at most
+ * one per STATUS_REFRESH_TTL_MS; within that window the cached snapshot serves.
  */
 export async function getStatus(): Promise<PublicStatus> {
-  if (state.endpointId) {
+  if (state.endpointId && Date.now() - lastLiveRefreshAt >= STATUS_REFRESH_TTL_MS) {
+    lastLiveRefreshAt = Date.now();
     try {
       for await (const ep of highnote.collaborativeAuth.list()) {
         if (ep.id === state.endpointId) {

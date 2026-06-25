@@ -59,4 +59,10 @@ concern and the change you would make if you adopted the app for real users.
   collaborative-auth endpoints at startup against `WEBHOOK_PUBLIC_URL`.
   Verify webhook signatures, scope the registrations, and review the
   pay-by-link / client-token surfaces before trusting them with real money
-  movement.
+  movement. The manual re-registration routes
+  (`POST /api/collab-auth/register`, `POST /api/webhooks/register`) tear down
+  and re-mint the money-movement endpoints with a new signing key, so they are
+  capped to a slow cooldown (3 requests / 5 min) to prevent churn-driven
+  stand-in/decline pressure. Set `ADMIN_EMAILS` (comma-separated) to restrict
+  these routes to named operators; when unset, any authenticated user may call
+  them (single-user demo default).

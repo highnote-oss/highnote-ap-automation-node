@@ -19,6 +19,41 @@ export interface AuthUser {
   email: string;
 }
 
+/**
+ * Comma-separated allowlist of operator emails permitted to manage
+ * money-movement registrations (collab-auth / webhook endpoints). When unset,
+ * any authenticated user may manage them (single-user demo default). Set this
+ * on shared or hosted instances to lock registration churn to known operators.
+ */
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS ?? "")
+  .split(",")
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean);
+
+/** Whether an operator allowlist is configured for the registration routes. */
+export function isAdminAllowlistConfigured(): boolean {
+  return ADMIN_EMAILS.length > 0;
+}
+
+/**
+ * Route guard for sensitive registration management. Use as a `preHandler` on
+ * routes that tear down and re-mint money-movement endpoints. When ADMIN_EMAILS
+ * is configured, only those operators pass; otherwise it is a no-op so the
+ * single-user demo keeps working, and the per-route rate limit is the backstop.
+ */
+export async function requireAdmin(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  if (ADMIN_EMAILS.length === 0) {
+    return;
+  }
+  const email = request.user?.email?.toLowerCase();
+  if (!email || !ADMIN_EMAILS.includes(email)) {
+    return reply.status(403).send({ error: "Admin access required" });
+  }
+}
+
 declare module "fastify" {
   interface FastifyRequest {
     user: AuthUser;

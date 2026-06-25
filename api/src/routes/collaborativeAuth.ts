@@ -12,6 +12,7 @@ import { invoices, collabAuthDecisions } from "../db/schema.js";
 import * as collabAuthRegistration from "../services/collabAuthRegistration.js";
 import { getSigningKey } from "../services/collabAuthRegistration.js";
 import { IdParamsSchema } from "../types.js";
+import { requireAdmin } from "../middleware/auth.js";
 
 const CollabAuthDecisionsQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(200).default(100),
@@ -252,6 +253,12 @@ export async function collaborativeAuthRoutes(app: FastifyInstance) {
   typedApp.post(
     "/api/collab-auth/register",
     {
+      // Re-registration tears down every bay19-auto-* endpoint and mints a fresh
+      // one with a new signing key — churning the money-movement authorization
+      // plane. Gate it to admins (when configured) and cap it to a slow cooldown
+      // so it can't be looped into a stand-in/decline DoS.
+      preHandler: requireAdmin,
+      config: { rateLimit: { max: 3, timeWindow: "5 minutes" } },
       schema: {
         tags: ["Collaborative Auth"],
         description:

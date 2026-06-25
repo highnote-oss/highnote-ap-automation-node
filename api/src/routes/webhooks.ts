@@ -16,6 +16,7 @@ import {
   WebhookRegisterBodySchema,
   type InvoiceStatus,
 } from "../types.js";
+import { requireAdmin } from "../middleware/auth.js";
 
 const DeliveryAttemptsQuerySchema = z.object({
   unsuccessfulOnly: z.coerce.boolean().optional().default(false),
@@ -444,6 +445,11 @@ export async function webhookRoutes(app: FastifyInstance) {
   typedApp.post(
     "/api/webhooks/register",
     {
+      // Re-registration tears down every bay19-auto-* target and mints a fresh
+      // one with a new signing key. Gate it to admins (when configured) and cap
+      // it to a slow cooldown so it can't be looped to churn webhook delivery.
+      preHandler: requireAdmin,
+      config: { rateLimit: { max: 3, timeWindow: "5 minutes" } },
       schema: {
         tags: ["Webhooks"],
         description:

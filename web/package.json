@@ -15,11 +15,11 @@
     "@highnoteplatform/card-viewer": "^1.4.2",
     "@highnoteplatform/document-upload": "^1.1.5",
     "@highnoteplatform/secure-inputs": "^1.8.0",
-    "@tailwindcss/vite": "^4.3.1",
-    "@tanstack/react-query": "^5.100.14",
+    "@tailwindcss/vite": "^4.3.2",
+    "@tanstack/react-query": "^5.101.2",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "react-router-dom": "^7.14.2",
+    "react-router-dom": "^7.18.1",
     "tailwindcss": "^4.3.0"
   },
   "overrides": {
@@ -28,16 +28,16 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^22.19.18",
+    "@types/node": "^22.20.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1",
-    "eslint": "^10.5.0",
+    "@vitejs/plugin-react": "^6.0.3",
+    "eslint": "^10.6.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
-    "globals": "^17.5.0",
+    "globals": "^17.7.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.61.1",
-    "vite": "^8.0.14"
+    "typescript-eslint": "^8.62.1",
+    "vite": "^8.1.2"
   }
 }
